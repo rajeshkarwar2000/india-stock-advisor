@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"   # keep-alive ping every 6 hours
+    - cron: "0 */6 * * *"
 
 permissions:
   contents: write
@@ -20,22 +20,25 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Unpack india-stock-advisor.zip into the repo
+      - name: Unpack zip into the repo
         if: github.event_name != 'pull_request'
-        run: | if [ -f india-stock-advisor.zip ] && { [ ! -f app.py ] || git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qx 'india-stock-advisor.zip'; }; then unzip -oq india-stock-advisor.zip -d _unpack SRC=_unpack [ -d _unpack/india-stock-advisor ] && SRC=_unpack/india-stock-advisor rm -rf "$SRC/.github" cp -a "$SRC"/. ./ rm -rf _unpack git config user.name "github-actions[bot]" git config user.email "github-actions[bot]@users.noreply.github.com" git add -A if ! git diff --cached --quiet; then git commit -m "Unpack project files from zip" git push origin HEAD:"$GITHUB_REF_NAME" fi else echo "Nothing to unpack." fi 
+        run: if [ -f india-stock-advisor.zip ] && { [ ! -f app.py ] || git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qx india-stock-advisor.zip; }; then unzip -oq india-stock-advisor.zip -d _unpack; SRC=_unpack; [ -d _unpack/india-stock-advisor ] && SRC=_unpack/india-stock-advisor; rm -rf "$SRC/.github"; cp -a "$SRC"/. ./; rm -rf _unpack; git config user.name github-actions; git config user.email github-actions@users.noreply.github.com; git add -A; if ! git diff --cached --quiet; then git commit -m "Unpack project files from zip"; git push origin HEAD:"$GITHUB_REF_NAME"; fi; else echo Nothing to unpack; fi
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install dependencies
-        run: | pip install -r requirements.txt pip install pytest ruff 
+        run: pip install -r requirements.txt pytest ruff
+
       - name: Block leaked API keys
-        run: | ! grep -rEn 'AIza[0-9A-Za-z_-]{30,}|AQ\.[0-9A-Za-z_-]{30,}' --include='*.py' --include='*.toml' --include='*.yml' --include='*.md' . 
+        run: if grep -rEn 'AIza[0-9A-Za-z_-]{30,}|AQ\.[0-9A-Za-z_-]{30,}' --include='*.py' --include='*.toml' --include='*.md' .; then exit 1; fi
+
       - name: Compile check
         run: python -m py_compile app.py engine.py gemini_client.py
 
-      - name: Lint (real errors only)
+      - name: Lint
         continue-on-error: true
         run: ruff check --select E9,F .
 
@@ -49,4 +52,4 @@ jobs:
       - name: Ping Streamlit app
         env:
           APP_URL: ${{ vars.APP_URL }}
-        run: | if [ -n "$APP_URL" ]; then curl -sS -L -o /dev/null -w "HTTP %{http_code}\n" "$APP_URL" else echo "Add a repository variable named APP_URL to enable pinging." fi
+        run: if [ -n "$APP_URL" ]; then curl -sS -L -o /dev/null -w "HTTP %{http_code}\n" "$APP_URL"; else echo Add a repository variable named APP_URL to enable pinging; fi
