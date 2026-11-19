@@ -30,3 +30,8 @@ If you see a "model not found" error, update the model name in the sidebar to a 
 `.github/workflows/ci.yml` runs on every push: installs dependencies, compile-checks the code and runs the tests in `tests/`.
 Deploy for free at share.streamlit.io by pointing it at this repo (main file `app.py`). Never commit your API key;
 `.gitignore` already excludes `.streamlit/secrets.toml` and saved demo accounts.
+
+## Ask Gemini without an API key
+Open the "Ask Gemini" tab > "Copy & paste". Pick a question, tap Copy prompt, tap Open Gemini, paste the prompt,
+then paste Gemini's JSON reply back into the app. The app turns it into cards with a live-price check and a Demo buy button.
+(In the Android app, Open Gemini launches the Gemini app or your browser.)

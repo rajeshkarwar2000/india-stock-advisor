@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -21,7 +22,21 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
 
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri u = request.getUrl();
+                String host = u.getHost() == null ? "" : u.getHost();
+                String appHost = Uri.parse(BuildConfig.APP_URL).getHost();
+                boolean internal = host.endsWith("streamlit.app") || host.endsWith("streamlit.io")
+                        || (appHost != null && host.equals(appHost));
+                if (internal) return false;
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, u));
+                } catch (Exception ignored) { }
+                return true;
+            }
+        });
         web.setDownloadListener((url, userAgent, contentDisposition, mime, length) ->
                 startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))));
 

@@ -1,5 +1,6 @@
 import datetime as dt, json, os, re
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
+import streamlit.components.v1 as components
 import engine as E
 import gemini_client as G
 
@@ -114,6 +115,17 @@ def show(kind, col, months, gain):
                 err = trade(sym, "BUY", p["qty"], r.price, round(p["stop"], 2), round(p["target"], 2))
                 st.error(err) if err else (st.success("Demo order placed. See the Portfolio tab."), st.rerun())
 
+def build_context():
+    cols = ["price", "r1m", "r3m", "r12m", "rsi", "vol"]
+    def block(col, name):
+        t = m.sort_values(col, ascending=False).head(10)[cols].copy()
+        for c in ["r1m", "r3m", "r12m", "vol"]: t[c] = (t[c] * 100).round(0)
+        t[["price", "rsi"]] = t[["price", "rsi"]].round(0)
+        return f"Top {name} (price Rs, 1M/3M/12M return %, RSI, volatility %):\n" + t.to_string()
+    pos_, _ = E.positions(acct["trades"])
+    hold = ", ".join(f"{k} x{v['qty']} avg {v['cost']/v['qty']:.0f}" for k, v in pos_.items()) or "none"
+    return f"As of {close.index[-1]:%d %b %Y}\n{block('short', '1-month momentum ideas')}\n{block('long', '1-year ideas')}\nDemo holdings: {hold}"
+
 t1, t2, t3, t4, t5 = st.tabs(["1‑Month ideas", "1‑Year ideas", "💼 Demo portfolio", "Backtest", "🤖 Ask Gemini"])
 with t1: show("short", "short", 1, 10)
 with t2: show("long", "long", 12, 100)
@@ -196,37 +208,80 @@ with t4:
         st.caption("Uses today's stock list (survivorship bias), ignores brokerage, taxes and slippage. Real results will be lower.")
 
 with t5:
-    st.write("Ask Gemini for its own view. It also receives this app's current rankings and your demo holdings as context.")
-    def build_context():
-        cols = ["price", "r1m", "r3m", "r12m", "rsi", "vol"]
-        def block(col, name):
-            t = m.sort_values(col, ascending=False).head(10)[cols].copy()
-            for c in ["r1m", "r3m", "r12m", "vol"]: t[c] = (t[c] * 100).round(0)
-            t[["price", "rsi"]] = t[["price", "rsi"]].round(0)
-            return f"Top {name} (price Rs, 1M/3M/12M return %, RSI, volatility %):\n" + t.to_string()
-        pos_, _ = E.positions(acct["trades"])
-        hold = ", ".join(f"{k} x{v['qty']} avg {v['cost']/v['qty']:.0f}" for k, v in pos_.items()) or "none"
-        return f"As of {close.index[-1]:%d %b %Y}\n{block('short', '1-month momentum ideas')}\n{block('long', '1-year ideas')}\nDemo holdings: {hold}"
-    chat = st.session_state.setdefault("gchat", [])
-    qs = {"Best 1‑month ideas?": "From the app data and current news, which 3 stocks look best for the next month, and what are the risks, entry, stop-loss and target for each?",
-          "Best 1‑year ideas?": "From the app data and current news, which 3 stocks look best for a 1-year horizon, and what could go wrong?",
-          "Review my demo portfolio": "Review my demo holdings. What are the concentration and risk issues, and what would you change?"}
-    cols_ = st.columns(len(qs)); quick = None
-    for c_, (lab, txt) in zip(cols_, qs.items()):
-        if c_.button(lab, use_container_width=True): quick = txt
-    for h in chat: st.chat_message("user" if h["role"] == "user" else "assistant").write(h["text"])
-    q = st.chat_input("Ask about a stock, strategy or your portfolio…") or quick
-    if q:
-        if not gkey:
-            st.error("Add your Gemini API key in the sidebar first (free at aistudio.google.com).")
-        else:
-            chat.append(dict(role="user", text=q)); st.chat_message("user").write(q)
-            with st.chat_message("assistant"), st.spinner("Gemini is thinking…"):
-                try:
-                    ans = G.ask(gkey, gmodel.strip(), chat, build_context(), gsearch)
-                    chat.append(dict(role="model", text=ans)); st.write(ans)
-                except Exception as e:
-                    chat.pop(); st.error(str(e))
-    if chat and st.button("Clear chat"): chat.clear(); st.rerun()
-    st.caption("Gemini's answers are AI-generated opinions, can be wrong, and are not SEBI-registered advice. "
-               "Your question, the rankings and your demo holdings are sent to Google when you ask. Your API key may be billed by Google if you exceed the free tier.")
+    ta, tb = st.tabs(["📋 Copy & paste (no key)", "⚡ Direct (API key)"])
+    with ta:
+        st.write("**1.** Build a prompt  **2.** Copy it and open Gemini  **3.** Paste Gemini's reply below to get recommendations here.")
+        kind = st.radio("What do you want to ask?", E.PROMPT_KINDS)
+        own = st.text_input("Your question") if kind == E.PROMPT_KINDS[3] else ""
+        prompt = E.build_prompt(kind, own, build_context(), dt.date.today())
+        tj = json.dumps(prompt).replace("</", "<\\/")
+        components.html(f"""<button id="b" style="padding:12px;border:0;border-radius:8px;background:#1d6fd8;color:#fff;font:600 15px system-ui;width:100%">📋 Copy prompt</button>
+<script>const t={tj};const b=document.getElementById('b');
+b.onclick=async()=>{{let ok=false;try{{await navigator.clipboard.writeText(t);ok=true}}catch(e){{}}
+if(!ok){{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();try{{ok=document.execCommand('copy')}}catch(e){{}}a.remove()}}
+b.textContent=ok?'✅ Copied! Now open Gemini and paste':'Copy failed: open Show prompt text below and long-press to copy'}};</script>""", height=60)
+        st.link_button("🚀 Open Gemini", "https://gemini.google.com/app", use_container_width=True)
+        with st.expander("Show prompt text"): st.code(prompt, language=None)
+        st.divider()
+        reply = st.text_area("Paste Gemini's reply here", height=160, key="greply", placeholder="Paste the JSON reply from Gemini…")
+        if st.button("✅ Show recommendations", type="primary", use_container_width=True):
+            items = E.parse_recs(reply)
+            if items:
+                acct["recs"] = dict(ts=dt.datetime.now().strftime("%d %b %Y %H:%M"), items=items); save()
+            elif items is None:
+                st.error("Couldn't find the JSON list in that reply. Ask Gemini: 'Reply again with only the JSON array', then paste it.")
+                if reply.strip(): st.markdown("**Gemini's raw reply:**"); st.write(reply)
+            else:
+                st.warning("The reply had no usable recommendations.")
+        recs = acct.get("recs")
+        if recs:
+            st.subheader("Gemini's recommendations")
+            st.caption(f"Pasted {recs['ts']} · AI opinion, can be wrong, not SEBI-registered advice")
+            for i, r in enumerate(recs["items"]):
+                last = px(r["symbol"])
+                with st.container(border=True):
+                    st.markdown(f"### {r['symbol']} · {r['action'] or 'n/a'}")
+                    f_ = lambda v: "n/a" if v is None else f"₹{v:,.2f}"
+                    st.write(f"Entry {f_(r['entry'])} · Stop-loss {f_(r['stop'])} · Target {f_(r['target'])}")
+                    st.caption(f"{r['horizon']} · confidence {r['confidence'] or 'n/a'}")
+                    if r["reason"]: st.write(r["reason"])
+                    if r["risk"]: st.caption(f"⚠️ Risk: {r['risk']}")
+                    if last == last:
+                        st.caption(f"Live price now ≈ ₹{last:,.2f}")
+                        if r["entry"] and abs(r["entry"] / last - 1) > 0.10:
+                            st.warning(f"Gemini's entry differs from the live price by {abs(r['entry']/last-1)*100:.0f}%. It may have used old prices.")
+                        if r["stop"] and r["stop"] >= last: st.warning("Its stop-loss is above the live price, so it is not usable as given.")
+                        if r["target"] and r["target"] <= last: st.warning("Its target is below the live price.")
+                        stop_ok = r["stop"] if r["stop"] and r["stop"] < last else None
+                        q = E.qty_for(last, stop_ok, capital, risk)
+                        if q >= 1 and st.button(f"🧪 Demo buy {q} @ ₹{last:,.2f}", key=f"gr_{i}_{r['symbol']}"):
+                            err = trade(r["symbol"], "BUY", q, last, stop_ok, r["target"] if r["target"] and r["target"] > last else None)
+                            st.error(err) if err else (st.success("Demo order placed. See the Demo portfolio tab."), st.rerun())
+                    else:
+                        st.info("This symbol isn't in the scanned list. Add it in the sidebar (Add NSE symbols) to get a live price.")
+            if st.button("Clear recommendations"): acct.pop("recs", None); save(); st.rerun()
+    with tb:
+        st.write("Ask Gemini directly inside the app. It also receives this app's current rankings and your demo holdings as context.")
+        chat = st.session_state.setdefault("gchat", [])
+        qs = {"Best 1‑month ideas?": "From the app data and current news, which 3 stocks look best for the next month, and what are the risks, entry, stop-loss and target for each?",
+              "Best 1‑year ideas?": "From the app data and current news, which 3 stocks look best for a 1-year horizon, and what could go wrong?",
+              "Review my demo portfolio": "Review my demo holdings. What are the concentration and risk issues, and what would you change?"}
+        cols_ = st.columns(len(qs)); quick = None
+        for c_, (lab, txt) in zip(cols_, qs.items()):
+            if c_.button(lab, use_container_width=True): quick = txt
+        for h in chat: st.chat_message("user" if h["role"] == "user" else "assistant").write(h["text"])
+        q = st.chat_input("Ask about a stock, strategy or your portfolio…") or quick
+        if q:
+            if not gkey:
+                st.error("Add your Gemini API key in the sidebar first (free at aistudio.google.com).")
+            else:
+                chat.append(dict(role="user", text=q)); st.chat_message("user").write(q)
+                with st.chat_message("assistant"), st.spinner("Gemini is thinking…"):
+                    try:
+                        ans = G.ask(gkey, gmodel.strip(), chat, build_context(), gsearch)
+                        chat.append(dict(role="model", text=ans)); st.write(ans)
+                    except Exception as e:
+                        chat.pop(); st.error(str(e))
+        if chat and st.button("Clear chat"): chat.clear(); st.rerun()
+        st.caption("Gemini's answers are AI-generated opinions, can be wrong, and are not SEBI-registered advice. "
+                   "Your question, the rankings and your demo holdings are sent to Google when you ask. Your API key may be billed by Google if you exceed the free tier.")

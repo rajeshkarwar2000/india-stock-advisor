@@ -109,3 +109,49 @@ def history(trades, close, start_cash):
             cash -= s * x.qty * x.price; q[x.symbol] = q.get(x.symbol, 0) + s * x.qty
         rows[d] = cash + sum(n * close[s].loc[d] for s, n in q.items() if n and s in close.columns)
     return pd.Series(rows)
+
+# ---------- Copy-paste Gemini flow ----------
+import json as _json, re as _re
+
+PROMPT_KINDS = ["1‑month ideas", "1‑year ideas", "Review my demo portfolio", "My own question"]
+_ASK = {PROMPT_KINDS[0]: "Pick the best NSE stocks to consider for roughly the next 1 month.",
+        PROMPT_KINDS[1]: "Pick the best NSE stocks to consider for roughly the next 12 months.",
+        PROMPT_KINDS[2]: "Review my demo holdings below and say what to buy more of, hold or avoid."}
+_FORMAT = ('Reply ONLY with a JSON array (no other text, no markdown) of up to 5 objects, each exactly like: '
+           '{"symbol":"NSE symbol e.g. RELIANCE","action":"Buy now | Wait for dip | Avoid","entry":number in rupees,'
+           '"stop_loss":number,"target":number,"horizon":"1 month | 1 year","confidence":"low | medium | high",'
+           '"reason":"max 2 sentences","risk":"main risk, max 1 sentence"}')
+
+def build_prompt(kind, own, context, today):
+    ask = own.strip() or "Suggest NSE stocks worth researching." if kind == PROMPT_KINDS[3] else _ASK[kind]
+    return (f"You are a cautious equity research assistant for an Indian retail investor (NSE, prices in ₹). "
+            f"Today is {today:%d %b %Y}. {ask} Use the app data below plus the latest news and prices you can find. "
+            f"Never promise returns; targets like +10-20% in a month or +100% in a year are uncertain. "
+            f"This is not SEBI-registered advice.\n\nApp data:\n{context}\n\n{_FORMAT}")
+
+def _num(v):
+    try: return float(str(v).replace(",", "").replace("₹", "").replace("Rs", "").strip())
+    except Exception: return None
+
+def parse_recs(text):
+    """Extract recommendation objects from a pasted Gemini reply. Returns a list (maybe empty) or None if no JSON found."""
+    m = _re.search(r"\[.*\]", text or "", _re.S)
+    if not m: return None
+    try: data = _json.loads(m.group(0))
+    except Exception: return None
+    out = []
+    for d in data if isinstance(data, list) else []:
+        if not isinstance(d, dict) or not d.get("symbol"): continue
+        sym = _re.sub(r"^(NSE:|BSE:)|\.(NS|BO)$", "", str(d["symbol"]).upper().strip())
+        out.append(dict(symbol=sym, action=str(d.get("action", "")), entry=_num(d.get("entry")),
+                        stop=_num(d.get("stop_loss", d.get("stop"))), target=_num(d.get("target")),
+                        horizon=str(d.get("horizon", "")), confidence=str(d.get("confidence", "")),
+                        reason=str(d.get("reason", "")), risk=str(d.get("risk", ""))))
+    return out[:10]
+
+def qty_for(price, stop, capital, risk_pct):
+    """Shares to buy: risk-based if the stop is below price, else 10% of capital; never above 20% of capital."""
+    if not price or price <= 0: return 0
+    if stop and stop < price: q = capital * risk_pct / 100 / (price - stop)
+    else: q = capital * 0.10 / price
+    return int(min(q, capital * 0.2 / price))
