@@ -84,5 +84,10 @@ def test_universe_csv_and_any_company_prompt():
     assert len(E.EXTENDED) > len(E.UNIVERSE) > 50 and len(set(E.EXTENDED)) == len(E.EXTENDED)
     import datetime as dt
     p = E.build_prompt(E.PROMPT_KINDS[1], "", "CTX", dt.date(2026, 11, 19), n=8)
-    assert "ANY NSE-listed company" in p and "up to 8 objects" in p
-    assert "ANY NSE/BSE-listed company" in G.SYSTEM
+    assert "NO restrictions" in p and "up to 8 objects" in p and "CTX" in p
+    assert "CTX" not in E.build_prompt(E.PROMPT_KINDS[0], "", "", dt.date(2026, 11, 19)) and "Optional background" not in E.build_prompt(E.PROMPT_KINDS[0], "", "", dt.date(2026, 11, 19))
+    assert "ANY NSE/BSE-listed company" in G.SYSTEM and "never a limit" in G.SYSTEM
+
+def test_all_nse_csv_series_filter():
+    txt = "SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING\nAAA,A Ltd,EQ,01-JAN-2020\nBBB,B Ltd,SM,01-JAN-2021\nCCC,C Ltd,N1,01-JAN-2022\n"
+    assert E.parse_universe_csv(txt, ("EQ", "SM")) == ["AAA", "BBB"] and E.parse_universe_csv(txt) == ["AAA", "BBB", "CCC"]

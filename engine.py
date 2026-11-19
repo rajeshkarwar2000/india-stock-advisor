@@ -22,16 +22,17 @@ EXTENDED = list(dict.fromkeys(EXTENDED))
 
 NIFTY500_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 
-def parse_universe_csv(text):
-    """Symbols from an NSE index-constituents CSV (has a 'Symbol' column). Returns [] if it can't be read."""
+NSE_ALL_URL = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"   # every NSE-listed equity, incl. new IPOs
+
+def parse_universe_csv(text, series=None):
+    """Symbols from an NSE CSV (has a 'Symbol' column). series=('EQ','BE') keeps only those series. Returns [] if unreadable."""
     import csv, io
     try:
-        rows = list(csv.DictReader(io.StringIO(text or "")))
-        col = next((k for k in (rows[0] if rows else {}) if k and k.strip().lower() == "symbol"), None)
-        syms = [str(r[col]).strip().upper() for r in rows if col and r.get(col)]
+        rows = [{(k or "").strip().lower(): (v or "").strip() for k, v in r.items()} for r in csv.DictReader(io.StringIO(text or ""))]
+        syms = [r["symbol"].upper() for r in rows if r.get("symbol") and (not series or r.get("series", "").upper() in series)]
     except Exception:
         return []
-    return list(dict.fromkeys(s for s in syms if s and not s.startswith("DUMMY")))
+    return list(dict.fromkeys(x for x in syms if x and not x.startswith("DUMMY")))
 
 def rsi(s, n=14):
     d = s.diff()
@@ -144,21 +145,24 @@ _ASK = {PROMPT_KINDS[0]: "Pick the best NSE stocks to consider for roughly the n
         PROMPT_KINDS[2]: "Review my demo holdings below and say what to buy more of, hold or avoid."}
 def _format(n):
     return (f'Reply ONLY with a JSON array (no other text, no markdown) of up to {n} objects, each exactly like: '
-            '{"symbol":"NSE symbol e.g. RELIANCE","action":"Buy now | Wait for dip | Avoid","entry":number in rupees,'
+            '{"symbol":"exact NSE symbol","action":"Buy now | Wait for dip | Avoid","entry":number in rupees,'
             '"stop_loss":number,"target":number,"horizon":"1 month | 1 year","confidence":"low | medium | high",'
             '"reason":"max 2 sentences","risk":"main risk, max 1 sentence"}')
 
-ANY_COMPANY = ("You are NOT limited to the stocks in the app data: that is only a screen. Recommend ANY NSE-listed company "
-               "(large, mid or small cap, any sector) that you judge best, using its exact NSE symbol, and prefer stocks "
-               "with reasonable daily trading volume.")
+ANY_COMPANY = ("You have NO restrictions on which stocks to suggest. Search the whole NSE/BSE market and recommend ANY listed "
+               "company, large, mid or small cap, in any sector, including lesser-known names, whichever you genuinely judge "
+               "best right now. Do not default to famous index heavyweights unless they are truly the best picks. Use the exact "
+               "NSE symbol and prefer stocks with reasonable daily trading volume.")
 
 def build_prompt(kind, own, context, today, n=5):
     ask = own.strip() or "Suggest NSE stocks worth researching." if kind == PROMPT_KINDS[3] else _ASK[kind]
+    data = (f"Optional background data from the user's app (only a hint, NOT a limit on your choices):\n{context}\n\n"
+            if context else "")
     return (f"You are a cautious equity research assistant for an Indian retail investor (NSE, prices in ₹). "
-            f"Today is {today:%d %b %Y}. {ask} Use the app data below plus the latest news and prices you can find. "
+            f"Today is {today:%d %b %Y}. {ask} Use the latest news, results and prices you can find. "
             f"{ANY_COMPANY} "
             f"Never promise returns; targets like +10-20% in a month or +100% in a year are uncertain. "
-            f"This is not SEBI-registered advice.\n\nApp data:\n{context}\n\n{_format(n)}")
+            f"This is not SEBI-registered advice.\n\n{data}{_format(n)}")
 
 def _num(v):
     try: return float(str(v).replace(",", "").replace("₹", "").replace("Rs", "").strip())

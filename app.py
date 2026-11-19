@@ -6,39 +6,42 @@ import gemini_client as G
 import themes as T
 
 st.set_page_config(page_title="India Stock Advisor", page_icon="📈", layout="centered")
-st.title("📈 India Stock Advisor")
+st.markdown('<h1><span style="color:#C96442">✻</span> India Stock Advisor</h1>', unsafe_allow_html=True)
+st.caption("Ideas from the whole Indian market, practice trading with virtual money, and Gemini to think things through.")
 st.warning("Auto-updating ideas, **not** guarantees. No tool can reliably deliver +10–20% in a month or "
            "+100% in a year. Demo trading uses virtual money only. Not investment advice; "
            "consult a SEBI-registered advisor.")
 
 with st.sidebar:
-    st.caption("🎨 Appearance")
-    _names = list(T.THEMES); _q = st.query_params.get("theme")
-    theme = st.selectbox("Theme", _names, index=_names.index(_q) if _q in _names else 0,
-                         help="Pick a look. ColorOS 7 Glass is the default. Your choice is kept in the page address.")
-    if st.query_params.get("theme") != theme: st.query_params["theme"] = theme
-    _t, _glass = T.THEMES[theme], T.THEMES[theme].get("css", True)
-    blur = st.slider("Glass blur", 0, 40, _t.get("blur", 24), key=f"blur_{theme}", disabled=not _glass)
-    rad = st.slider("Corner roundness", 0, 32, _t.get("radius", 20), key=f"rad_{theme}", disabled=not _glass)
-    anim = st.checkbox("Animated background", True, disabled=not _glass)
-    st.divider()
-    user = re.sub(r"[^a-z0-9_-]", "", st.text_input("Demo account name", "me").lower()) or "me"
-    capital = st.number_input("Capital for sizing ideas (₹)", 10000, 100000000, 100000, step=10000)
-    risk = st.slider("Max loss per trade (% of capital)", 0.5, 3.0, 1.0, 0.5)
-    topn = st.slider("How many ideas", 3, 15, 8)
-    extra = st.text_input("Add NSE symbols (comma-separated)", "", help="Any NSE-listed company, e.g. IRFC, SUZLON")
-    universe = st.radio("Stocks to scan", ["Nifty 500 (broad, slower first load)", "Core 55 (fast)"],
-                        help="Nifty 500 covers large, mid and small caps across all sectors.")
-    min_val = st.slider("Min daily traded value (₹ crore)", 0, 100, 5,
-                        help="Hides thinly traded stocks that are risky to buy or sell. Set 0 to include everything.")
-    auto_exec = st.checkbox("Auto-sell at stop-loss / target (demo)", True)
-    st.divider(); st.caption("🤖 Gemini (optional)")
-    try: _k = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception: _k = ""
-    gkey = st.text_input("Gemini API key", value=_k or os.environ.get("GEMINI_API_KEY", ""), type="password",
-                         help="Free key from aistudio.google.com. Stored only for this session.")
-    gmodel = st.text_input("Gemini model", "gemini-flash-latest", help="Check ai.google.dev for current model names.")
-    gsearch = st.checkbox("Let Gemini search the web (Google Search)", True)
+    st.markdown("### Settings")
+    with st.expander("🎨  Appearance"):
+        _names = list(T.THEMES); _q = st.query_params.get("theme")
+        theme = st.selectbox("Theme", _names, index=_names.index(_q) if _q in _names else 0,
+                             help="Claude Warm is the default. Your choice is kept in the page address.")
+        if st.query_params.get("theme") != theme: st.query_params["theme"] = theme
+        _t = T.THEMES[theme]; _glass = _t.get("css", True) is not False; _flat = bool(_t.get("flat"))
+        blur = st.slider("Glass blur", 0, 40, _t.get("blur", 24), key=f"blur_{theme}", disabled=(not _glass) or _flat)
+        rad = st.slider("Corner roundness", 0, 32, _t.get("radius", 20), key=f"rad_{theme}", disabled=not _glass)
+        anim = st.checkbox("Animated background", True, disabled=(not _glass) or _flat)
+    with st.expander("💼  Trading"):
+        user = re.sub(r"[^a-z0-9_-]", "", st.text_input("Demo account name", "me").lower()) or "me"
+        capital = st.number_input("Capital for sizing ideas (₹)", 10000, 100000000, 100000, step=10000)
+        risk = st.slider("Max loss per trade (% of capital)", 0.5, 3.0, 1.0, 0.5)
+        auto_exec = st.checkbox("Auto-sell at stop-loss / target (demo)", True)
+    with st.expander("🔎  Stock scan"):
+        universe = st.radio("Stocks to scan", ["Nifty 500 (broad, slower first load)", "All NSE stocks (~2,000+, slowest)", "Core 55 (fast)"],
+                            help="Nifty 500 = large, mid and small caps. All NSE = every listed company (first load can take several minutes).")
+        topn = st.slider("How many ideas", 3, 15, 8)
+        extra = st.text_input("Add NSE symbols (comma-separated)", "", help="Any NSE-listed company, e.g. IRFC, SUZLON")
+        min_val = st.slider("Min daily traded value (₹ crore)", 0, 100, 5,
+                            help="Hides thinly traded stocks that are risky to buy or sell. Set 0 to include everything.")
+    with st.expander("✦  Gemini (optional)"):
+        try: _k = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception: _k = ""
+        gkey = st.text_input("Gemini API key", value=_k or os.environ.get("GEMINI_API_KEY", ""), type="password",
+                             help="Free key from aistudio.google.com. Stored only for this session.")
+        gmodel = st.text_input("Gemini model", "gemini-flash-latest", help="Check ai.google.dev for current model names.")
+        gsearch = st.checkbox("Let Gemini search the web (Google Search)", True)
 
 _css = T.css(theme, blur, rad, anim)
 if _css: st.markdown(_css, unsafe_allow_html=True)
@@ -56,17 +59,17 @@ def save(): json.dump(acct, open(path, "w"))
 
 # ---------- data ----------
 @st.cache_data(ttl=86400, show_spinner=False)
-def nifty500():
-    """Live Nifty 500 constituents from NSE; empty list if NSE can't be reached."""
+def nse_list(url, series=None, min_count=100):
+    """Live list of NSE symbols from NSE's own CSV; empty list if NSE can't be reached."""
     try:
-        r = requests.get(E.NIFTY500_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
-        syms = E.parse_universe_csv(r.text)
-        return syms if len(syms) > 100 else []
+        syms = E.parse_universe_csv(r.text, series)
+        return syms if len(syms) > min_count else []
     except Exception:
         return []
 
-@st.cache_data(ttl=3600, show_spinner="Fetching latest NSE prices (first load of the broad list can take a minute)…")
+@st.cache_data(ttl=3600, show_spinner="Fetching latest NSE prices (first load of a broad list can take a few minutes)…")
 def load(symbols):
     closes, vols = [], []
     for k in range(0, len(symbols), 100):
@@ -112,8 +115,12 @@ def fundamentals(sym):
 
 held = tuple(E.positions(acct["trades"])[0])
 extra_syms = [s.strip().upper() for s in extra.split(",") if s.strip()]
-if universe.startswith("Nifty"):
-    _n5 = nifty500()
+if universe.startswith("All NSE"):
+    _all = nse_list(E.NSE_ALL_URL, ("EQ", "BE", "BZ", "SM", "ST"), 500)
+    base = E.UNIVERSE + (_all or E.EXTENDED)
+    if not _all: st.caption("⚠️ Couldn't download NSE's full company list, so a built-in list of ~200 stocks is used.")
+elif universe.startswith("Nifty"):
+    _n5 = nse_list(E.NIFTY500_URL)
     base = E.UNIVERSE + (_n5 or E.EXTENDED)
     if not _n5: st.caption("⚠️ Couldn't download the live Nifty 500 list from NSE, so a built-in list of ~200 stocks is used.")
 else:
@@ -193,11 +200,12 @@ def build_context():
     hold = ", ".join(f"{k} x{v['qty']} avg {v['cost']/v['qty']:.0f}" for k, v in pos_.items()) or "none"
     return f"As of {close.index[-1]:%d %b %Y}. The lists below are only a screen of {len(m)} NSE stocks, NOT a limit on what you may recommend.\n{block('short', '1-month momentum ideas')}\n{block('long', '1-year ideas')}\nDemo holdings: {hold}"
 
-t1, t2, t3, t4, t5 = st.tabs(["1‑Month ideas", "1‑Year ideas", "💼 Demo portfolio", "Backtest", "🤖 Ask Gemini"])
-with t1: show("short", "short", 1, 10)
-with t2: show("long", "long", 12, 100)
+VIEWS = ["1‑Month ideas", "1‑Year ideas", "💼 Portfolio", "Backtest", "✦ Ask Gemini"]
+view = st.pills("View", VIEWS, selection_mode="single", default=VIEWS[0], key="view", label_visibility="collapsed") or VIEWS[0]
+if view == VIEWS[0]: show("short", "short", 1, 10)
+if view == VIEWS[1]: show("long", "long", 12, 100)
 
-with t3:
+if view == VIEWS[2]:
     pos, realised = E.positions(acct["trades"]); cash = E.cash_balance(acct["start_cash"], acct["trades"])
     rows = []
     for s, p in pos.items():
@@ -263,7 +271,7 @@ with t3:
         st.caption("Demo only: virtual money, no brokerage, taxes or slippage, instant fills at the last available price. "
                    "On free cloud hosting, saved accounts may reset when the app restarts, so export a backup.")
 
-with t4:
+if view == VIEWS[3]:
     st.write("How the 1‑month strategy (top 5 by momentum, rebalanced every ~21 trading days) would have done on this stock list over the past ~2 years:")
     bt = E.backtest(close[ok])
     if len(bt):
@@ -274,15 +282,17 @@ with t4:
         st.line_chart(((1 + bt.set_index("date")[["strategy", "universe"]]).cumprod() - 1) * 100)
         st.caption("Uses today's stock list (survivorship bias), ignores brokerage, taxes and slippage. Real results will be lower.")
 
-with t5:
+if view == VIEWS[4]:
+    share = st.checkbox("Also share this app's rankings with Gemini (optional hint)", False,
+                        help="Off = Gemini picks freely from the whole market with no hints from this app.")
     ta, tb = st.tabs(["📋 Copy & paste (no key)", "⚡ Direct (API key)"])
     with ta:
         st.write("**1.** Build a prompt  **2.** Copy it and open Gemini  **3.** Paste Gemini's reply below to get recommendations here.")
-        kind = st.radio("What do you want to ask?", E.PROMPT_KINDS)
+        kind = st.pills("What do you want to ask?", E.PROMPT_KINDS, selection_mode="single", default=E.PROMPT_KINDS[0], key="kind") or E.PROMPT_KINDS[0]
         own = st.text_input("Your question") if kind == E.PROMPT_KINDS[3] else ""
-        prompt = E.build_prompt(kind, own, build_context(), dt.date.today(), n=min(topn, 10))
-        tj = json.dumps(prompt).replace("</", "<\\/")
-        components.html(f"""<button id="b" style="padding:12px;border:0;border-radius:8px;background:#1d6fd8;color:#fff;font:600 15px system-ui;width:100%">📋 Copy prompt</button>
+        prompt = E.build_prompt(kind, own, build_context() if (share or kind == E.PROMPT_KINDS[2]) else "", dt.date.today(), n=min(topn, 10))
+        _acc = T.THEMES[theme].get("accent", "#C96442"); tj = json.dumps(prompt).replace("</", "<\\/")
+        components.html(f"""<button id="b" style="padding:12px;border:0;border-radius:12px;background:{_acc};color:#fff;font:500 15px system-ui;width:100%">📋 Copy prompt</button>
 <script>const t={tj};const b=document.getElementById('b');
 b.onclick=async()=>{{let ok=false;try{{await navigator.clipboard.writeText(t);ok=true}}catch(e){{}}
 if(!ok){{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();try{{ok=document.execCommand('copy')}}catch(e){{}}a.remove()}}
@@ -329,10 +339,10 @@ b.textContent=ok?'✅ Copied! Now open Gemini and paste':'Copy failed: open Show
                         st.info("Couldn't find an NSE price for this symbol. Check the NSE symbol spelling (BSE-only stocks can't be demo-traded).")
             if st.button("Clear recommendations"): acct.pop("recs", None); save(); st.rerun()
     with tb:
-        st.write("Ask Gemini directly inside the app. It also receives this app's current rankings and your demo holdings as context.")
+        st.write("Ask Gemini directly inside the app. It can pick any listed company. Tick the box above to also send it this app's rankings and your demo holdings.")
         chat = st.session_state.setdefault("gchat", [])
-        qs = {"Best 1‑month ideas?": "From the app data and current news, which 3 stocks (any NSE company, not only those in the app data) look best for the next month, and what are the risks, entry, stop-loss and target for each?",
-              "Best 1‑year ideas?": "From the app data and current news, which 3 stocks (any NSE company, not only those in the app data) look best for a 1-year horizon, and what could go wrong?",
+        qs = {"Best 1‑month ideas?": "From the app data and current news, which 3 stocks (any NSE company, no restrictions) look best for the next month, and what are the risks, entry, stop-loss and target for each?",
+              "Best 1‑year ideas?": "From the app data and current news, which 3 stocks (any NSE company, no restrictions) look best for a 1-year horizon, and what could go wrong?",
               "Review my demo portfolio": "Review my demo holdings. What are the concentration and risk issues, and what would you change?"}
         cols_ = st.columns(len(qs)); quick = None
         for c_, (lab, txt) in zip(cols_, qs.items()):
@@ -346,7 +356,7 @@ b.textContent=ok?'✅ Copied! Now open Gemini and paste':'Copy failed: open Show
                 chat.append(dict(role="user", text=q)); st.chat_message("user").write(q)
                 with st.chat_message("assistant"), st.spinner("Gemini is thinking…"):
                     try:
-                        ans = G.ask(gkey, gmodel.strip(), chat, build_context(), gsearch)
+                        ans = G.ask(gkey, gmodel.strip(), chat, build_context() if (share or "holding" in q.lower() or "portfolio" in q.lower()) else "", gsearch)
                         chat.append(dict(role="model", text=ans)); st.write(ans)
                     except Exception as e:
                         chat.pop(); st.error(str(e))

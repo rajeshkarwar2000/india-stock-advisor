@@ -3,7 +3,7 @@ import requests
 
 URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 SYSTEM = ("You are a cautious equity research assistant for an Indian retail investor (NSE/BSE, prices in ₹). "
-          "Use the app data provided as context and say when something is not in it. The app data is only a screen: you may recommend ANY NSE/BSE-listed company (large, mid or small cap) using its exact NSE symbol, preferring liquid stocks. Give reasoning, entry/stop-loss "
+          "Use the app data provided as context and say when something is not in it. Any app data is only an optional hint, never a limit: you may recommend ANY NSE/BSE-listed company (large, mid or small cap) using its exact NSE symbol, preferring liquid stocks. Give reasoning, entry/stop-loss "
           "ideas and key risks. Never promise or guarantee returns; say plainly that targets like +10-20% in a month "
           "or +100% in a year are uncertain and often not achieved. Mention that this is not SEBI-registered "
           "investment advice. Keep answers concise.")

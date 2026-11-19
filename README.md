@@ -4,11 +4,11 @@ Auto-updating momentum/growth screener for NSE stocks, with entry, stop-loss, ta
 plus a virtual-money trading account (like Groww / Angel One) to practise and track results.
 
 ## Themes
-Sidebar > Appearance: ColorOS 7 Glass (default), iOS Frosted, Sunset Glass, Aurora Dark, AMOLED Black, or Classic (plain).
+Sidebar > Settings > Appearance: Claude Warm (default), Claude Dark, ColorOS 7 Glass, iOS Frosted, Sunset Glass, Aurora Dark, AMOLED Black, or Classic (plain).
 You can also change glass blur, corner roundness and turn the animated background off. The theme is kept in the page address.
 
 ## Which stocks are scanned
-Sidebar > Stock scan: **Nifty 500** (live list from NSE, large/mid/small caps in every sector) or **Core 55** (fast).
+Sidebar > Settings > Stock scan: **Nifty 500** (live list from NSE, large/mid/small caps in every sector) or **Core 55** (fast).
 Any other NSE company can be added with "Add NSE symbols". Thinly traded stocks are hidden by the
 "Min daily traded value" slider (set 0 to include everything). Gemini may recommend ANY NSE-listed company;
 the app fetches a live price for it so you can still demo-buy.
