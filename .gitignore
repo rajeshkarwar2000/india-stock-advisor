@@ -6,3 +6,4 @@ portfolios/
 android/.gradle/
 android/build/
 android/app/build/
+scan_cache/

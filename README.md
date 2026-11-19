@@ -3,22 +3,12 @@
 Auto-updating momentum/growth screener for NSE stocks, with entry, stop-loss, target and position size,
 plus a virtual-money trading account (like Groww / Angel One) to practise and track results.
 
-## Themes
-Sidebar > Settings > Appearance: Claude Warm (default), Claude Dark, ColorOS 7 Glass, iOS Frosted, Sunset Glass, Aurora Dark, AMOLED Black, or Classic (plain).
-You can also change glass blur, corner roundness and turn the animated background off. The theme is kept in the page address.
-
-## Which stocks are scanned
-Sidebar > Settings > Stock scan: **Nifty 500** (live list from NSE, large/mid/small caps in every sector) or **Core 55** (fast).
-Any other NSE company can be added with "Add NSE symbols". Thinly traded stocks are hidden by the
-"Min daily traded value" slider (set 0 to include everything). Gemini may recommend ANY NSE-listed company;
-the app fetches a live price for it so you can still demo-buy.
-
 ## Run on your computer
     pip install -r requirements.txt
     streamlit run app.py
 
 ## Free hosting (works on your phone, always up to date)
-1. Upload `app.py`, `engine.py`, `gemini_client.py`, `themes.py`, `requirements.txt`, the `.streamlit` folder to a GitHub repo.
+1. Upload `app.py`, `engine.py`, `requirements.txt` to a GitHub repo.
 2. Go to share.streamlit.io, sign in with GitHub, choose the repo, main file `app.py`, Deploy.
 
 ## Demo trading
@@ -44,4 +34,19 @@ Deploy for free at share.streamlit.io by pointing it at this repo (main file `ap
 ## Ask Gemini without an API key
 Open the "Ask Gemini" tab > "Copy & paste". Pick a question, tap Copy prompt, tap Open Gemini, paste the prompt,
 then paste Gemini's JSON reply back into the app. The app turns it into cards with a live-price check and a Demo buy button.
-(In the Android app, Open Gemini launches the Gemini app, or your browser if the Gemini app isn't installed.)
+(In the Android app, Open Gemini launches the Gemini app or your browser.)
+
+## Themes
+Sidebar > Appearance: pick ColorOS 7 Glass (default), Midnight Glass, Aurora, Sunset, Neon Terminal or Classic. Adjust glass blur or turn off the animated background to save battery. The choice is saved with your demo account.
+
+## Any company, research-based ideas
+- "Find any stock" searches every NSE/BSE company by name, symbol or BSE code (new listings such as Jio Platforms, NSE: JPL, work too, with a short-history warning).
+- Idea cards combine price trend with broker/analyst ratings and targets, institutional holding and results data (revenue, earnings, margins, ROE, debt).
+- The Gemini prompt tells Gemini to weigh broker and institutional views, global news and technology shifts, government policy and company results, and lets it pick ANY listed company.
+- Appearance has Text size and High contrast options for the clearest text.
+
+## Market scan (any listed company)
+The "Market scan" tab downloads NSE's stock list (Nifty 500, plus Microcap 250, or every listed stock), pulls about 14 months of prices and volume,
+removes stocks that are too thinly traded or too cheap to be feasible (set by your risk appetite), and ranks the rest by return potential:
+3/1/6-month momentum, closeness to the 52-week high, volume surge and trend, plus analyst and results data for the top names.
+Results are cached in scan_cache/ so reopening is instant; re-run for fresh prices.
