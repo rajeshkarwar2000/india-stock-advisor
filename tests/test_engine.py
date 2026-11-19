@@ -2,7 +2,7 @@ import os, sys
 from unittest import mock
 import numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-import engine as E, gemini_client as G
+import engine as E, gemini_client as G, themes as T
 
 def prices(n=760, k=30, seed=1):
     rng = np.random.default_rng(seed)
@@ -63,3 +63,26 @@ def test_qty_for():
     assert E.qty_for(100, 99.5, 100000, 1) == 200        # cap
     assert E.qty_for(100, None, 100000, 1) == 100        # 10% of capital
     assert E.qty_for(0, 90, 100000, 1) == 0
+
+def test_themes_generate_css():
+    assert "ColorOS 7 Glass" in T.THEMES and T.DEFAULT in T.THEMES
+    for name, t in T.THEMES.items():
+        out = T.css(name)
+        if t.get("css") is False:
+            assert out == ""
+        else:
+            assert out.startswith("<style>") and out.endswith("</style>") and "__" not in out and "\n" not in out
+            assert t["accent"] in out and "backdrop-filter" in out
+    assert "--blur:7px" in T.css("ColorOS 7 Glass", blur=7) and "--r:5px" in T.css("ColorOS 7 Glass", radius=5)
+    assert "animation:osdrift" not in T.css("ColorOS 7 Glass", animate=False)
+    assert "invert" in T.css("Aurora Dark") and "invert" not in T.css("ColorOS 7 Glass")
+
+def test_universe_csv_and_any_company_prompt():
+    csv_text = "Company Name,Industry,Symbol,Series,ISIN Code\nA Ltd,X,AAA,EQ,1\nB Ltd,X,bbb ,EQ,2\nD,X,DUMMYXYZ,EQ,3\nA again,X,AAA,EQ,4\n"
+    assert E.parse_universe_csv(csv_text) == ["AAA", "BBB"]
+    assert E.parse_universe_csv("garbage") == [] and E.parse_universe_csv("") == []
+    assert len(E.EXTENDED) > len(E.UNIVERSE) > 50 and len(set(E.EXTENDED)) == len(E.EXTENDED)
+    import datetime as dt
+    p = E.build_prompt(E.PROMPT_KINDS[1], "", "CTX", dt.date(2026, 11, 19), n=8)
+    assert "ANY NSE-listed company" in p and "up to 8 objects" in p
+    assert "ANY NSE/BSE-listed company" in G.SYSTEM

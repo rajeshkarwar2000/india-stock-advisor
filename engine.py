@@ -8,6 +8,31 @@ ADANIPORTS BEL HAL COALINDIA TRENT CIPLA DRREDDY EICHERMOT HCLTECH WIPRO TECHM N
 BAJAJFINSV INDIGO HINDALCO GRASIM DIVISLAB APOLLOHOSP SBILIFE HDFCLIFE TVSMOTOR CGPOWER POLYCAB DIXON
 PERSISTENT COFORGE MUTHOOTFIN CHOLAFIN PFC RECLTD IRFC BANKBARODA HAVELLS PIDILITIND ZOMATO""".split()
 
+# Extra well-known NSE names, used only if the live Nifty 500 list can't be downloaded (bad symbols are simply skipped).
+EXTENDED = UNIVERSE + """BAJAJ-AUTO HEROMOTOCO BPCL IOC GAIL VEDL SHRIRAMFIN INDUSINDBK ADANIGREEN ADANIPOWER AMBUJACEM DLF GODREJCP
+GODREJPROP LODHA OBEROIRLTY PRESTIGE MAXHEALTH FORTIS LUPIN AUROPHARMA TORNTPHARM ZYDUSLIFE ALKEM MANKIND BIOCON ABBOTINDIA
+BERGEPAINT COLPAL DABUR MARICO UNITDSPR VOLTAS BLUESTARCO CROMPTON KEI ASTRAL SUPREMEIND APLAPOLLO JINDALSTEL SAIL NMDC
+NATIONALUM HINDZINC LICI ICICIPRULI ICICIGI SBICARD HDFCAMC CANBK PNB UNIONBANK IDFCFIRSTB FEDERALBNK AUBANK BANDHANBNK
+YESBANK INDIANB LICHSGFIN MANAPPURAM PAYTM POLICYBZR NYKAA DELHIVERY IRCTC RVNL IRCON NHPC SJVN TATAPOWER TORNTPOWER
+JSWENERGY SUZLON BHEL SIEMENS ABB CUMMINSIND THERMAX LTIM LTTS MPHASIS OFSS KPITTECH TATAELXSI CYIENT BSOFT TATACOMM
+INDUSTOWER IDEA MRF BALKRISHIND APOLLOTYRE CEATLTD ASHOKLEY BOSCHLTD MOTHERSON SONACOMS UNOMINDA ESCORTS BHARATFORG
+EXIDEIND PAGEIND JUBLFOOD BATAINDIA RELAXO VBL DMART NAUKRI JIOFIN BDL MAZDOCK COCHINSHIP GRSE BEML SOLARINDS DEEPAKNTR
+PIIND SRF UPL COROMANDEL CHAMBLFERT TATACHEM NAVINFLUOR AARTIIND ATUL CONCOR GMRAIRPORT ABCAPITAL""".split()
+EXTENDED = list(dict.fromkeys(EXTENDED))
+
+NIFTY500_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
+
+def parse_universe_csv(text):
+    """Symbols from an NSE index-constituents CSV (has a 'Symbol' column). Returns [] if it can't be read."""
+    import csv, io
+    try:
+        rows = list(csv.DictReader(io.StringIO(text or "")))
+        col = next((k for k in (rows[0] if rows else {}) if k and k.strip().lower() == "symbol"), None)
+        syms = [str(r[col]).strip().upper() for r in rows if col and r.get(col)]
+    except Exception:
+        return []
+    return list(dict.fromkeys(s for s in syms if s and not s.startswith("DUMMY")))
+
 def rsi(s, n=14):
     d = s.diff()
     up = d.clip(lower=0).ewm(alpha=1/n, adjust=False).mean()
@@ -117,17 +142,23 @@ PROMPT_KINDS = ["1‑month ideas", "1‑year ideas", "Review my demo portfolio",
 _ASK = {PROMPT_KINDS[0]: "Pick the best NSE stocks to consider for roughly the next 1 month.",
         PROMPT_KINDS[1]: "Pick the best NSE stocks to consider for roughly the next 12 months.",
         PROMPT_KINDS[2]: "Review my demo holdings below and say what to buy more of, hold or avoid."}
-_FORMAT = ('Reply ONLY with a JSON array (no other text, no markdown) of up to 5 objects, each exactly like: '
-           '{"symbol":"NSE symbol e.g. RELIANCE","action":"Buy now | Wait for dip | Avoid","entry":number in rupees,'
-           '"stop_loss":number,"target":number,"horizon":"1 month | 1 year","confidence":"low | medium | high",'
-           '"reason":"max 2 sentences","risk":"main risk, max 1 sentence"}')
+def _format(n):
+    return (f'Reply ONLY with a JSON array (no other text, no markdown) of up to {n} objects, each exactly like: '
+            '{"symbol":"NSE symbol e.g. RELIANCE","action":"Buy now | Wait for dip | Avoid","entry":number in rupees,'
+            '"stop_loss":number,"target":number,"horizon":"1 month | 1 year","confidence":"low | medium | high",'
+            '"reason":"max 2 sentences","risk":"main risk, max 1 sentence"}')
 
-def build_prompt(kind, own, context, today):
+ANY_COMPANY = ("You are NOT limited to the stocks in the app data: that is only a screen. Recommend ANY NSE-listed company "
+               "(large, mid or small cap, any sector) that you judge best, using its exact NSE symbol, and prefer stocks "
+               "with reasonable daily trading volume.")
+
+def build_prompt(kind, own, context, today, n=5):
     ask = own.strip() or "Suggest NSE stocks worth researching." if kind == PROMPT_KINDS[3] else _ASK[kind]
     return (f"You are a cautious equity research assistant for an Indian retail investor (NSE, prices in ₹). "
             f"Today is {today:%d %b %Y}. {ask} Use the app data below plus the latest news and prices you can find. "
+            f"{ANY_COMPANY} "
             f"Never promise returns; targets like +10-20% in a month or +100% in a year are uncertain. "
-            f"This is not SEBI-registered advice.\n\nApp data:\n{context}\n\n{_FORMAT}")
+            f"This is not SEBI-registered advice.\n\nApp data:\n{context}\n\n{_format(n)}")
 
 def _num(v):
     try: return float(str(v).replace(",", "").replace("₹", "").replace("Rs", "").strip())
