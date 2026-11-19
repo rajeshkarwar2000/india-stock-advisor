@@ -36,7 +36,7 @@ jobs:
         run: if grep -rEn 'AIza[0-9A-Za-z_-]{30,}|AQ\.[0-9A-Za-z_-]{30,}' --include='*.py' --include='*.toml' --include='*.md' .; then exit 1; fi
 
       - name: Compile check
-        run: python -m py_compile app.py engine.py gemini_client.py
+        run: python -m py_compile app.py engine.py gemini_client.py themes.py   # CHANGED
 
       - name: Lint
         continue-on-error: true
@@ -46,7 +46,7 @@ jobs:
         run: pytest -q
 
       - name: Prepare downloadable app folder
-        run: mkdir -p dist && cp -r app.py engine.py gemini_client.py requirements.txt README.md .streamlit tests dist/ && printf 'pip install -r requirements.txt\nstreamlit run app.py\n' > dist/start.sh && printf '@echo off\r\npip install -r requirements.txt\r\nstreamlit run app.py\r\npause\r\n' > dist/start.bat
+        run: mkdir -p dist && cp -r app.py engine.py gemini_client.py themes.py requirements.txt README.md .streamlit tests dist/ && printf 'pip install -r requirements.txt\nstreamlit run app.py\n' > dist/start.sh && printf '@echo off\r\npip install -r requirements.txt\r\nstreamlit run app.py\r\npause\r\n' > dist/start.bat   # CHANGED
 
       - name: Upload app as downloadable artifact
         uses: actions/upload-artifact@v4
