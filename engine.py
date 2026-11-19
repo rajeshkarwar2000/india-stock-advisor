@@ -1,4 +1,5 @@
 """Scoring, strategy and backtest logic (pandas/numpy only)."""
+import datetime as _dt
 import numpy as np, pandas as pd
 from math import erf, sqrt, log
 
@@ -55,6 +56,8 @@ def score(m: pd.DataFrame) -> pd.DataFrame:
     m.loc[m.rsi > 78, "short"] -= 15          # overheated: likely to pull back
     t200 = np.where(m.price > m.dma200, 100, 0)
     m["long"] = 0.35*_rk(m.r12m.fillna(m.r6m)) + 0.25*_rk(m.r6m) + 0.2*_rk(-m.vol) + 0.2*t200
+    m["mid"] = 0.30*_rk(m.r6m.fillna(m.r3m)) + 0.25*_rk(m.r3m) + 0.20*_rk(m.price/m.hi52) + 0.15*t200 + 0.10*_rk(-m.vol)
+    m.loc[m.rsi > 80, "mid"] -= 10
     return m
 
 def p_hit(gain_pct, vol, months):
@@ -73,9 +76,15 @@ def plan(r, capital, risk_pct, kind, target_px=None):
         stop = entry - 2 * atr
         target = entry + 3 * atr
         action = f"Wait for dip to ~₹{entry:,.0f}" if wait else "Buy now"
+    elif kind == "mid":
+        entry = p
+        stop = min(max(r.dma50 * 0.96 if not np.isnan(r.dma50) else p * 0.85, p * 0.82), p * 0.95)
+        target = target_px if target_px and p * 1.05 < target_px <= p * 1.8 else p * 1.20
+        action = "Buy in 2 parts"
     else:
         entry = p
         stop = max(r.dma200 * 0.97 if not np.isnan(r.dma200) else p * 0.8, p * 0.75)
+        stop = min(stop, p * 0.95)            # a stop must sit below the price
         target = target_px if target_px and target_px > p else p * 1.3
         action = "Accumulate in 3 parts"
     risk_per_share = max(entry - stop, 0.01)
@@ -97,41 +106,93 @@ def backtest(close: pd.DataFrame, topn=5, hold=21):
 
 # ---------- Demo (paper) trading ----------
 def positions(trades):
-    """Open positions (average-cost method) and realised P&L from a trade list."""
+    """Open positions (average-cost method) and realised P&L from a trade list (no charges)."""
     pos, realised = {}, 0.0
     for t in trades:
-        p = pos.setdefault(t["symbol"], dict(qty=0, cost=0.0, stop=None, target=None, since=t["ts"]))
+        p = pos.setdefault(t["symbol"], dict(qty=0, cost=0.0, stop=None, target=None, since=t["ts"],
+                                             horizon=None, product="DELIVERY"))
         if t["side"] == "BUY":
-            if p["qty"] == 0: p["since"] = t["ts"]
+            if p["qty"] == 0:       # fresh entry: forget the old stop/target of an earlier, closed position
+                p.update(since=t["ts"], cost=0.0, stop=None, target=None, horizon=None)
             p["cost"] += t["qty"] * t["price"]; p["qty"] += t["qty"]
+            p["product"] = t.get("product") or "DELIVERY"
+            if t.get("horizon"): p["horizon"] = t["horizon"]
             if t.get("stop"): p["stop"], p["target"] = t["stop"], t.get("target")
-        else:
-            avg = p["cost"] / p["qty"]
-            realised += (t["price"] - avg) * t["qty"]
-            p["cost"] -= avg * t["qty"]; p["qty"] -= t["qty"]
+        elif p["qty"] > 0:
+            q = min(t["qty"], p["qty"]); avg = p["cost"] / p["qty"]
+            realised += (t["price"] - avg) * q
+            p["cost"] -= avg * q; p["qty"] -= q
+            if p["qty"] == 0: p["cost"] = 0.0
     return {k: v for k, v in pos.items() if v["qty"] > 0}, realised
+
+def ledger(trades):
+    """Every SELL as a closed trade with its own realised P&L (same average-cost method as positions())."""
+    pos, out = {}, []
+    for t in trades:
+        p = pos.setdefault(t["symbol"], dict(qty=0, cost=0.0))
+        if t["side"] == "BUY":
+            if p["qty"] == 0: p["cost"] = 0.0
+            p["cost"] += t["qty"] * t["price"]; p["qty"] += t["qty"]
+        elif p["qty"] > 0:
+            q = min(t["qty"], p["qty"]); avg = p["cost"] / p["qty"]
+            out.append(dict(ts=t["ts"], symbol=t["symbol"], qty=q, buy=avg, sell=t["price"],
+                            pnl=(t["price"] - avg) * q, pct=(t["price"] / avg - 1) * 100))
+            p["cost"] -= avg * q; p["qty"] -= q
+            if p["qty"] == 0: p["cost"] = 0.0
+    return out
+
+def _live(ltp, s, fallback):
+    v = ltp.get(s)
+    try: v = float(v)
+    except Exception: return fallback
+    return v if v == v and v > 0 else fallback
+
+def performance(trades, start_cash, ltp):
+    """Realised + unrealised P&L in rupees and %, win rate, net worth. Always: total = net worth - starting cash."""
+    pos, realised = positions(trades); closed = ledger(trades)
+    cash = cash_balance(start_cash, trades)
+    inv = sum(p["cost"] for p in pos.values())
+    cur = sum(p["qty"] * _live(ltp, s, p["cost"] / p["qty"]) for s, p in pos.items())
+    sold_cost = sum(c["buy"] * c["qty"] for c in closed)
+    wins = [c for c in closed if c["pnl"] > 0]; losses = [c for c in closed if c["pnl"] < 0]
+    unreal = cur - inv; total = realised + unreal
+    return dict(realised=realised, realised_pct=realised / sold_cost * 100 if sold_cost else 0.0,
+                unrealised=unreal, unrealised_pct=unreal / inv * 100 if inv else 0.0,
+                total=total, total_pct=total / start_cash * 100 if start_cash else 0.0,
+                invested=inv, current=cur, cash=cash, net=cash + cur,
+                closed=len(closed), wins=len(wins), losses=len(losses),
+                win_rate=len(wins) / len(closed) * 100 if closed else 0.0,
+                best=max(closed, key=lambda c: c["pnl"]) if closed else None,
+                worst=min(closed, key=lambda c: c["pnl"]) if closed else None)
 
 def cash_balance(start_cash, trades):
     return start_cash + sum((1 if t["side"] == "SELL" else -1) * t["qty"] * t["price"] for t in trades)
 
 def history(trades, close, start_cash):
-    """Daily net worth (cash + holdings at closing prices) since the first trade."""
+    """Daily net worth (cash + holdings at closing prices) from the day of the first trade."""
     if not trades: return pd.Series(dtype=float)
     t = pd.DataFrame(trades); t["d"] = pd.to_datetime(t.ts).dt.normalize()
-    close = close.ffill(); rows = {}
-    for d in close.index[close.index >= t.d.min()]:
-        cash, q = start_cash, {}
-        for _, x in t[t.d <= d].iterrows():
-            s = 1 if x.side == "BUY" else -1
-            cash -= s * x.qty * x.price; q[x.symbol] = q.get(x.symbol, 0) + s * x.qty
-        rows[d] = cash + sum(n * close[s].loc[d] for s, n in q.items() if n and s in close.columns)
-    return pd.Series(rows)
+    close = close.ffill(); days = close.index[close.index >= t.d.min()]
+    if len(days) == 0: return pd.Series(dtype=float)
+    syms = list(dict.fromkeys(t.symbol)); sg = np.where(t.side == "BUY", 1, -1)
+    di = np.clip(days.searchsorted(t.d.values), 0, len(days) - 1)
+    Q = np.zeros((len(days), len(syms))); cf = np.zeros(len(days))
+    np.add.at(Q, (di, [syms.index(x) for x in t.symbol]), sg * t.qty.values)
+    np.add.at(cf, di, -sg * t.qty.values * t.price.values)
+    Q = Q.cumsum(0); cash = start_cash + cf.cumsum()
+    P = np.zeros_like(Q)
+    for j, s_ in enumerate(syms):
+        if s_ in close.columns: P[:, j] = close[s_].reindex(days).ffill().bfill().fillna(0).values
+        else: P[:, j] = float(t[t.symbol == s_].price.iloc[-1])
+    return pd.Series(cash + (Q * P).sum(1), index=days)
 
 # ---------- Copy-paste Gemini flow ----------
 import json as _json, re as _re
 
-PROMPT_KINDS = ["1‑month ideas", "1‑year ideas", "Review my demo portfolio", "My own question"]
-_ASK = {PROMPT_KINDS[0]: "Pick the stocks with the highest realistic return potential for roughly the next 1 month, from ANY listed company that is liquid enough to trade.",
+PROMPT_KINDS = ["1‑month ideas", "1‑year ideas", "Review my demo portfolio", "My own question", "6‑month ideas"]
+IDEA_KINDS = [PROMPT_KINDS[0], PROMPT_KINDS[4], PROMPT_KINDS[1], PROMPT_KINDS[3]]   # order shown in the Gemini tab
+_ASK = {PROMPT_KINDS[4]: "Pick the stocks with the highest realistic return potential for roughly the next 6 months, from ANY listed company that is liquid enough to trade.",
+        PROMPT_KINDS[0]: "Pick the stocks with the highest realistic return potential for roughly the next 1 month, from ANY listed company that is liquid enough to trade.",
         PROMPT_KINDS[1]: "Pick the stocks with the highest realistic return potential for roughly the next 12 months, from ANY listed company that is liquid enough to trade.",
         PROMPT_KINDS[2]: "Review my demo holdings below and say what to buy more of, hold or avoid, and suggest better alternatives."}
 
@@ -160,7 +221,7 @@ SYSTEM_RULES = ("You are a cautious, thorough equity research assistant for an I
 
 _FORMAT = ('Reply ONLY with a JSON array (no other text, no markdown) of up to 8 objects, each exactly like: '
            '{"symbol":"NSE symbol e.g. RELIANCE","company":"full company name","action":"Buy now | Wait for dip | Avoid",'
-           '"entry":number in rupees,"stop_loss":number,"target":number,"horizon":"1 month | 1 year",'
+           '"entry":number in rupees,"stop_loss":number,"target":number,"horizon":"1 month | 6 months | 1 year",'
            '"confidence":"low | medium | high","liquidity":"high | medium | low","reason":"max 2 sentences","broker_view":"what major brokers/institutions say, 1 sentence",'
            '"news_policy":"key global news / government policy driver, 1 sentence","financials":"latest results/profit trend, 1 sentence",'
            '"risk":"main risk, 1 sentence"}')
@@ -202,9 +263,10 @@ def qty_for(price, stop, capital, risk_pct):
 def blend(m, F):
     """Combine technical scores with broker/analyst and results data (F = {symbol: info dict})."""
     m = m.copy(); m["fund"] = np.nan
+    if "mid" not in m: m["mid"] = m["short"]
     keys = [k for k in m.index if F.get(k)]
     if not keys:
-        m["short2"], m["long2"] = m["short"], m["long"]
+        m["short2"], m["mid2"], m["long2"] = m["short"], m["mid"], m["long"]
         return m
     for c in ("up", "rec_mean", "eps_g", "rev_g"): m[c] = np.nan
     for k in keys:
@@ -215,8 +277,9 @@ def blend(m, F):
     sub = m.loc[keys]
     rk = lambda x: (x.rank(pct=True) * 100).fillna(50)
     fs = 0.35 * rk(sub["up"]) + 0.25 * rk(sub["eps_g"]) + 0.2 * rk(sub["rev_g"]) + 0.2 * rk(-sub["rec_mean"])
-    m["short2"] = np.nan; m["long2"] = np.nan; m.loc[keys, "fund"] = fs
+    m["short2"] = np.nan; m["mid2"] = np.nan; m["long2"] = np.nan; m.loc[keys, "fund"] = fs
     m.loc[keys, "short2"] = 0.8 * sub["short"] + 0.2 * fs
+    m.loc[keys, "mid2"] = 0.7 * sub["mid"] + 0.3 * fs
     m.loc[keys, "long2"] = 0.6 * sub["long"] + 0.4 * fs
     return m
 
@@ -249,12 +312,119 @@ def potential(m, profile):
     m["pot"] = (1 - p["volw"]) * base + p["volw"] * rk(m.vol)
     m.loc[m.rsi > 85, "pot"] -= 10                      # overheated
     m.loc[m.r1m * 100 > p["cap1m"], "pot"] -= 10        # already parabolic this month
+    t200 = np.where(m.price > m.dma200, 100, 0)
+    m["p1m"] = 0.40 * rk(m.r1m) + 0.30 * rk(m.r3m) + 0.15 * rk(m.vsurge.fillna(1)) + 0.15 * trend
+    m["p6m"] = 0.35 * rk(m.r6m.fillna(m.r3m)) + 0.25 * rk(m.r3m) + 0.20 * rk(m.price / m.hi52) + 0.20 * trend
+    m["p1y"] = 0.40 * rk(m.r12m.fillna(m.r6m)) + 0.20 * rk(m.r6m.fillna(m.r3m)) + 0.20 * t200 + 0.20 * rk(-m.vol)
+    for c in ("p1m", "p6m"): m.loc[m.rsi > 85, c] -= 10
+    m.loc[m.r1m * 100 > p["cap1m"], "p1m"] -= 10
     return m
 
+# ---------- Tags, signals, market hours ----------
+HORIZON_TAGS = {"short": "1M", "mid": "6M", "long": "1Y"}
+
+def horizon_of(text):
+    """'1 month' / '6 months' / '1 year' (or already 1M/6M/1Y) -> '1M' | '6M' | '1Y' | ''."""
+    t = str(text or "").lower().replace("‑", "-")
+    if t.strip().upper() in ("1M", "6M", "1Y"): return t.strip().upper()
+    if "year" in t or "12" in t: return "1Y"
+    if "6" in t or "six" in t: return "6M"
+    if "month" in t or "short" in t: return "1M"
+    return ""
+
+def _f(x):
+    try: x = float(x)
+    except Exception: return None
+    return x if x == x else None
+
+def signal(r, price=None, stop=None, target=None):
+    """('BUY' | 'HOLD' | 'SELL', reason) from stop/target and trend. Rules of thumb, not advice."""
+    p = _f(price) or _f(r.get("price"))
+    if not p: return "HOLD", "No price available"
+    d20, d50, d200, rsi_, r1m, r3m = (_f(r.get(k)) for k in ("dma20", "dma50", "dma200", "rsi", "r1m", "r3m"))
+    if stop and p <= stop * 1.01: return "SELL", "At or below your stop-loss"
+    if target and p >= target * 0.99: return "SELL", "Target almost reached: consider booking profit"
+    if d50 and p < d50 and (r1m is not None and r1m < -0.05): return "SELL", "Below the 50-day average with falling momentum"
+    if rsi_ and rsi_ > 75: return "HOLD", "Overheated (RSI above 75): avoid adding until it cools"
+    if d50 and d20 and p > d20 > d50 and (r3m or 0) > 0.03 and (rsi_ or 50) < 70:
+        return "BUY", "Uptrend with healthy momentum"
+    return "HOLD", "No strong signal either way"
+
+def tags_for(r, f=None, scan=False):
+    """Extra tags for a stock card: list of (text, kind) where kind is buy | sell | hold | info | risk | muted."""
+    f = f or {}; out = []
+    vol, rsi_, r3m, hi52, p = (_f(r.get(k)) for k in ("vol", "rsi", "r3m", "hi52", "price"))
+    if vol is not None:
+        out.append(("Very high risk", "sell") if vol >= 0.7 else ("High risk", "risk") if vol >= 0.45
+                   else ("Medium risk", "hold") if vol >= 0.28 else ("Low risk", "buy"))
+    if r3m is not None and r3m > 0.25: out.append(("Strong momentum", "buy"))
+    if p and hi52 and p / hi52 > 0.95: out.append(("Near 52W high", "info"))
+    if rsi_ is not None and rsi_ > 70: out.append(("Overbought", "risk"))
+    if rsi_ is not None and rsi_ < 30: out.append(("Oversold", "info"))
+    rec = str(f.get("rec") or "").lower()
+    if rec in ("strong_buy", "buy"): out.append(("Analysts: Buy", "buy"))
+    elif rec == "hold": out.append(("Analysts: Hold", "hold"))
+    elif rec in ("sell", "strong_sell", "underperform"): out.append(("Analysts: Sell", "sell"))
+    av = _f(r.get("avg_val"))
+    if scan and av is not None: out.append(("Thinly traded", "risk") if av < 5e7 else ("Liquid", "muted"))
+    return out
+
+def market_open(now):
+    """NSE cash hours (Mon-Fri 9:15-15:30). `now` should be an India-time datetime. Holidays are not checked."""
+    return now.weekday() < 5 and _dt.time(9, 15) <= now.time() <= _dt.time(15, 30)
+
+# ---------- Portfolio review (separate prompt for your holdings) ----------
+_REVIEW_FORMAT = ('Reply ONLY with a JSON array (no other text, no markdown): one object for EVERY holding below, plus up to 3 extra '
+                  '"Buy new" objects that would diversify the portfolio. Each object exactly like: '
+                  '{"symbol":"NSE symbol","action":"Hold | Buy more | Sell part | Sell all | Buy new","qty":number of shares to buy or sell (0 for Hold),'
+                  '"new_stop_loss":number or null,"new_target":number or null,"horizon":"1 month | 6 months | 1 year",'
+                  '"confidence":"low | medium | high","reason":"max 2 sentences","risk":"1 sentence"}')
+
+def build_review_prompt(rows, perf, today, notes="", context=""):
+    """rows: list of dicts with symbol, qty, avg, ltp, pnl, pnl_pct, weight, stop, target, horizon, signal."""
+    n = lambda v, d=2: "n/a" if v is None or v != v else f"{v:,.{d}f}"
+    lines = [f"- {r['symbol']}: {r['qty']} shares, bought avg Rs {n(r['avg'])}, now Rs {n(r['ltp'])}, P&L Rs {n(r['pnl'])} ({n(r['pnl_pct'])}%), "
+             f"{n(r['weight'], 1)}% of holdings, stop-loss {n(r.get('stop'))}, target {n(r.get('target'))}, "
+             f"planned horizon {r.get('horizon') or 'not set'}, app signal {r.get('signal', 'n/a')}" for r in rows] or ["- (no holdings yet)"]
+    head = (f"Portfolio value Rs {n(perf['current'], 0)} (invested Rs {n(perf['invested'], 0)}), virtual cash Rs {n(perf['cash'], 0)}, "
+            f"unrealised P&L Rs {n(perf['unrealised'], 0)} ({n(perf['unrealised_pct'])}%), realised P&L Rs {n(perf['realised'], 0)}, "
+            f"closed trades {perf['closed']} with {n(perf['win_rate'], 0)}% winners.")
+    return (f"You are a cautious, thorough equity research assistant for an Indian retail investor (NSE/BSE, prices in ₹). "
+            f"Today is {today:%d %b %Y}.\nTASK: Review my demo portfolio. For each holding say Hold, Buy more, Sell part or Sell all, "
+            f"with a quantity, a better stop-loss and target, and the reason. Check concentration (any stock or sector too large), "
+            f"stocks that are losing money for a reason that has not changed, and winners worth protecting. Be balanced and include the bear case.\n"
+            f"{RESEARCH_RULES}\n\nMy portfolio:\n{head}\n" + "\n".join(lines)
+            + (f"\n\nMy own notes:\n{notes}" if notes else "") + (f"\n\nApp data (one input only):\n{context}" if context else "")
+            + f"\n\n{_REVIEW_FORMAT}")
+
+def parse_review(text):
+    """Pasted portfolio-review reply -> list of action dicts (maybe empty), or None if no JSON list was found."""
+    m = _re.search(r"\[.*\]", text or "", _re.S)
+    if not m: return None
+    try: data = _json.loads(m.group(0))
+    except Exception: return None
+    out = []
+    for d in data if isinstance(data, list) else []:
+        if not isinstance(d, dict) or not d.get("symbol"): continue
+        sym = _re.sub(r"^(NSE:|BSE:)|\.(NS|BO)$", "", str(d["symbol"]).upper().strip())
+        a = str(d.get("action", "")).lower()
+        act = ("HOLD" if a.strip().startswith("hold") else "SELL ALL" if ("sell" in a and ("all" in a or "exit" in a)) else "SELL PART" if ("sell" in a or "trim" in a or "reduce" in a)
+               else "BUY NEW" if ("new" in a) else "BUY MORE" if ("buy" in a or "add" in a or "accumulate" in a) else "HOLD")
+        q = _num(d.get("qty")); g = lambda k: str(d.get(k, "") or "")
+        out.append(dict(symbol=sym, action=act, qty=int(q) if q and q > 0 else 0,
+                        stop=_num(d.get("new_stop_loss", d.get("stop_loss"))), target=_num(d.get("new_target", d.get("target"))),
+                        horizon=horizon_of(d.get("horizon")), confidence=g("confidence"), reason=g("reason"), risk=g("risk")))
+    return out[:25]
+
+
 # ---------- Themes (ColorOS 7 style glass etc.) ----------
-DEFAULT_THEME = "ColorOS 7 Glass"
+DEFAULT_THEME = "Groww Light"
 THEMES = {
     "Classic (default)": None,
+    "Groww Light": dict(
+        dark=False, base="#f4f5f7", acc_text="#ffffff", blobs=[], radius=14,
+        card="#ffffff", side="#ffffff", border="#e6e8ec", shadow="0 1px 3px rgba(16,24,40,.07)",
+        accent="#00b386", text="#1f2230", muted="#6b7083", pop="#ffffff"),
     "ColorOS 7 Glass": dict(
         dark=False, base="#eaf1fa", acc_text="#ffffff",
         blobs=[("120,200,255,.55", "12% 8%"), ("150,230,190,.50", "88% 35%"), ("255,205,170,.35", "40% 95%")],
@@ -286,7 +456,7 @@ def theme_css(name, blur=16, radius=22, animate=True, font_px=16, contrast=False
     t = THEMES.get(name)
     if not t:
         return f"<style>html{{font-size:{font_px}px}}</style>" if font_px != 16 else ""
-    t = dict(t)
+    t = dict(t); radius = t.get("radius", radius)
     if contrast:  # solid, no blur, maximum contrast
         dark = t["dark"]
         t.update(card="#000000" if dark else "#ffffff", side="#000000" if dark else "#ffffff",
@@ -296,7 +466,7 @@ def theme_css(name, blur=16, radius=22, animate=True, font_px=16, contrast=False
     layers = ",".join(f"radial-gradient(circle at {pos}, rgba({c}) 0, transparent 45%)" for c, pos in t["blobs"])
     bg = f"{layers}, {t['base']}" if layers else t["base"]
     glass = f"backdrop-filter: blur({blur}px) saturate(160%); -webkit-backdrop-filter: blur({blur}px) saturate(160%);" if blur else ""
-    anim = "background-size: 150% 150%; animation: oslide 22s ease-in-out infinite alternate;" if animate else ""
+    anim = "background-size: 150% 150%; animation: oslide 22s ease-in-out infinite alternate;" if animate and layers else ""
     font = f"font-family: {t['font']};" if t.get("font") else ""
     tx, mu, ac, at, bd = t["text"], t["muted"], t["accent"], t["acc_text"], t["border"]
     return f"""<style>

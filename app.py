@@ -1,32 +1,44 @@
-import datetime as dt, json, os, re
+import datetime as dt, json, os, re, time
 from concurrent.futures import ThreadPoolExecutor
+from zoneinfo import ZoneInfo
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 import streamlit.components.v1 as components
 import engine as E
 import gemini_client as G
+import ui as U
 
-st.set_page_config(page_title="India Stock Advisor", page_icon="📈", layout="centered")
-st.title("📈 India Stock Advisor")
-st.warning("Auto-updating ideas, **not** guarantees. No tool can reliably deliver +10–20% in a month or "
-           "+100% in a year. Demo trading uses virtual money only. Not investment advice; "
-           "consult a SEBI-registered advisor.")
+st.set_page_config(page_title="India Stock Advisor", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
+IST = ZoneInfo("Asia/Kolkata")
+now_ist = lambda: dt.datetime.now(IST)
+NONCE = f"{time.time():.3f}"
+HZ = {"1M": "1 Month", "6M": "6 Months", "1Y": "1 Year"}
+KIND_HZ = E.HORIZON_TAGS                      # short -> 1M, mid -> 6M, long -> 1Y
+st.markdown("### 📈 India Stock Advisor")
+st.caption("Virtual-money practice account. Ideas are research aids, not guarantees or SEBI-registered advice.")
 
 with st.sidebar:
-    user = re.sub(r"[^a-z0-9_-]", "", st.text_input("Demo account name", "me").lower()) or "me"
-    capital = st.number_input("Capital for sizing ideas (₹)", 10000, 100000000, 100000, step=10000)
-    risk = st.slider("Max loss per trade (% of capital)", 0.5, 3.0, 1.0, 0.5)
-    topn = st.slider("How many ideas", 3, 15, 8)
-    uni = st.selectbox("Stock universe", list(E.UNIVERSES), help="Any other company can be added in the 'Find any stock' tab.")
-    extra = st.text_input("Add NSE symbols to the scan (comma-separated)", "")
-    research_on = st.checkbox("Use analyst & results data (slower)", True)
-    auto_exec = st.checkbox("Auto-sell at stop-loss / target (demo)", True)
-    st.divider(); st.caption("🤖 Gemini (optional API)")
-    try: _k = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception: _k = ""
-    gkey = st.text_input("Gemini API key", value=_k or os.environ.get("GEMINI_API_KEY", ""), type="password",
-                         help="Free key from aistudio.google.com. Stored only for this session.")
-    gmodel = st.text_input("Gemini model", "gemini-flash-latest", help="Check ai.google.dev for current model names.")
-    gsearch = st.checkbox("Let Gemini search the web (Google Search)", True)
+    with st.expander("👤 Demo account", expanded=True):
+        user = re.sub(r"[^a-z0-9_-]", "", st.text_input("Account name", "me").lower()) or "me"
+        capital = st.number_input("Capital for sizing ideas (₹)", 10000, 100000000, 100000, step=10000)
+        risk = st.slider("Max loss per trade (% of capital)", 0.5, 3.0, 1.0, 0.5)
+    with st.expander("⏱ Live refresh", expanded=True):
+        auto_on = st.toggle("Auto-refresh prices", True, help="A countdown at the top shows the time left. It pauses while a buy/sell window is open.")
+        every = st.select_slider("Refresh every", options=[15, 30, 60, 120, 300], value=60,
+                                 format_func=lambda s: f"{s} sec" if s < 60 else f"{s // 60} min")
+    with st.expander("💡 Ideas"):
+        topn = st.slider("How many ideas per list", 3, 15, 8)
+        uni = st.selectbox("Stock universe", list(E.UNIVERSES), help="Search any other company in Explore > Search & watchlist.")
+        extra = st.text_input("Add NSE symbols to the lists (comma-separated)", "")
+        research_on = st.checkbox("Use analyst & results data (slower)", True)
+    with st.expander("🛡 Order rules"):
+        auto_exec = st.checkbox("Auto-sell at stop-loss / target (demo)", True)
+    with st.expander("🤖 Gemini API key (optional)"):
+        try: _k = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception: _k = ""
+        gkey = st.text_input("Gemini API key", value=_k or os.environ.get("GEMINI_API_KEY", ""), type="password",
+                             help="Free key from aistudio.google.com. Stored only for this session.")
+        gmodel = st.text_input("Gemini model", "gemini-flash-latest", help="Check ai.google.dev for current model names.")
+        gsearch = st.checkbox("Let Gemini search the web (Google Search)", True)
 
 # ---------- demo account storage (one JSON file per account name) ----------
 os.makedirs("portfolios", exist_ok=True)
@@ -38,19 +50,21 @@ if st.session_state.get("acct_user") != user:
     st.session_state.acct, st.session_state.acct_user = load_acct(), user
 acct = st.session_state.acct
 def save(): json.dump(acct, open(path, "w"))
+def flash(msg): st.session_state.setdefault("flash", []).append(msg)
 
 # ---------- appearance (saved per demo account) ----------
 _names = list(E.THEMES)
 with st.sidebar:
-    st.divider(); st.caption("🎨 Appearance")
-    th = st.selectbox("Theme", _names, index=_names.index(acct["theme"]) if acct.get("theme") in _names else _names.index(E.DEFAULT_THEME))
-    blur = st.slider("Glass blur", 0, 30, int(acct.get("blur", 16)), help="Lower is faster and saves battery. 0 = no blur.")
-    fs = st.slider("Text size", 14, 20, int(acct.get("fs", 16)))
-    hc = st.checkbox("High contrast (clearest text)", bool(acct.get("hc", False)))
-    anim = st.checkbox("Animated background", bool(acct.get("anim", True)))
+    with st.expander("🎨 Appearance"):
+        th = st.selectbox("Theme", _names, index=_names.index(acct["theme"]) if acct.get("theme") in _names else _names.index(E.DEFAULT_THEME))
+        blur = st.slider("Glass blur", 0, 30, int(acct.get("blur", 16)), help="Lower is faster and saves battery. 0 = no blur.")
+        fs = st.slider("Text size", 14, 20, int(acct.get("fs", 16)))
+        hc = st.checkbox("High contrast (clearest text)", bool(acct.get("hc", False)))
+        anim = st.checkbox("Animated background", bool(acct.get("anim", True)))
 _cur = dict(theme=th, blur=blur, fs=fs, hc=hc, anim=anim)
 if any(acct.get(k) != v for k, v in _cur.items()): acct.update(_cur); save()
-st.markdown(E.theme_css(th, blur, 22, anim, fs, hc), unsafe_allow_html=True)
+st.markdown(E.theme_css(th, blur, 22, anim, fs, hc) + U.GROWW_CSS, unsafe_allow_html=True)
+for _m in st.session_state.pop("flash", []): st.toast(_m)
 
 # ---------- data ----------
 def _dl(tickers, period="3y"):
@@ -84,15 +98,31 @@ def load_extra(symbols):
             except Exception: pass
     return pd.DataFrame(out)
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=20, show_spinner=False)
 def live_prices(symbols):
+    """Latest traded price for each symbol (cached 20 s; the Refresh button clears it)."""
+    if not symbols: return {}
     try:
-        d = yf.download([s + ".NS" for s in symbols], period="1d", interval="5m", progress=False, auto_adjust=True)["Close"]
+        d = yf.download([s + ".NS" for s in symbols], period="1d", interval="1m" if len(symbols) <= 40 else "5m",
+                        progress=False, auto_adjust=True)["Close"]
         if isinstance(d, pd.Series): d = d.to_frame(symbols[0] + ".NS")
         d = d.ffill().iloc[-1].dropna(); d.index = [c.replace(".NS", "") for c in d.index]
         return d.to_dict()
     except Exception:
         return {}
+
+@st.cache_data(ttl=20, show_spinner=False)
+def index_quotes():
+    try: d = yf.download(["^NSEI", "^BSESN"], period="5d", auto_adjust=True, progress=False)["Close"].ffill()
+    except Exception: return {}
+    out = {}
+    for k, v in (("Nifty 50", "^NSEI"), ("Sensex", "^BSESN")):
+        if v in d.columns and d[v].notna().sum() >= 2:
+            s = d[v].dropna(); out[k] = (float(s.iloc[-1]), float(s.iloc[-1] / s.iloc[-2] - 1) * 100)
+    return out
+
+def refresh_now():
+    live_prices.clear(); index_quotes.clear()
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_stocks(q):
@@ -147,60 +177,141 @@ def market_snapshot():
             s = d[v].dropna(); out[k] = (float(s.iloc[-1]), float(s.iloc[-1] / s.iloc[-2] - 1) * 100)
     return out
 
+# ---------- account helpers ----------
+def get_pos():
+    """Open positions with any stop-loss / target edits you made later (Portfolio > AI review)."""
+    pos, realised = E.positions(acct["trades"])
+    for s, lv in acct.get("levels", {}).items():
+        if s in pos:
+            if lv.get("stop"): pos[s]["stop"] = lv["stop"]
+            if lv.get("target"): pos[s]["target"] = lv["target"]
+    return pos, realised
+
 base = list(dict.fromkeys(E.UNIVERSES[uni] + [s.strip().upper() for s in extra.split(",") if s.strip()]))
 try:
     close = load(tuple(base))
 except Exception as e:
     st.error(f"Could not fetch data: {e}"); st.stop()
-held = list(E.positions(acct["trades"])[0])
+held = list(get_pos()[0])
 alias = acct.get("alias", {})
 rec_syms = [alias.get(r["symbol"]) or r["symbol"] for r in acct.get("recs", {}).get("items", [])]
-extras = [s for s in dict.fromkeys(acct.get("watch", []) + held + rec_syms) if s not in close.columns]
+order_syms = [o["symbol"] for o in acct.get("orders", [])]
+extras = [s for s in dict.fromkeys(acct.get("watch", []) + held + order_syms + rec_syms) if s not in close.columns]
 xdf = load_extra(tuple(extras)) if extras else pd.DataFrame()
 close_all = pd.concat([close, xdf], axis=1) if len(xdf.columns) else close
-live = live_prices(tuple(close_all.columns))
-def px(s):
-    if s in live: return float(live[s])
-    return float(close_all[s].dropna().iloc[-1]) if s in close_all.columns else float("nan")
-
-def trade(sym, side, qty, price, stop=None, target=None):
-    pos, _ = E.positions(acct["trades"]); cash = E.cash_balance(acct["start_cash"], acct["trades"])
-    if qty < 1: return "Quantity must be at least 1."
-    if not price == price: return "No price available for this symbol."
-    if side == "BUY" and qty * price > cash: return f"Not enough virtual cash (₹{cash:,.0f} available)."
-    if side == "SELL" and pos.get(sym, {}).get("qty", 0) < qty: return "You don't hold that many shares."
-    acct["trades"].append(dict(ts=dt.datetime.now().isoformat(timespec="seconds"), symbol=sym, side=side,
-                               qty=int(qty), price=round(float(price), 2), stop=stop, target=target))
-    save(); return None
-
-if auto_exec:   # bracket-order style stop-loss / target
-    msgs = []
-    for s, p in E.positions(acct["trades"])[0].items():
-        q, last = p["qty"], px(s)
-        if last != last: continue
-        if p["stop"] and last <= p["stop"] and not trade(s, "SELL", q, last): msgs.append(f"🛑 {s}: stop-loss hit, sold {q} @ ₹{last:,.2f}")
-        elif p["target"] and last >= p["target"] and not trade(s, "SELL", q, last): msgs.append(f"🎯 {s}: target hit, sold {q} @ ₹{last:,.2f}")
-    if msgs:
-        for m_ in msgs: st.toast(m_)
-        st.session_state.msgs = msgs; st.rerun()
-for m_ in st.session_state.pop("msgs", []): st.info(m_)
 
 # ---------- scoring: technicals + broker/analyst + results ----------
 m0 = E.score(E.metrics(close))
-cands = tuple(dict.fromkeys(list(m0.sort_values("short", ascending=False).head(20).index) + list(m0.sort_values("long", ascending=False).head(20).index)))
+cands = tuple(dict.fromkeys(sum([list(m0.sort_values(c, ascending=False).head(20).index) for c in ("short", "mid", "long")], [])))
 F = fund_many(cands) if research_on else {}
 m = E.blend(m0, F)
-miss = len(base) - len(close.columns)
-st.caption(f"Data as of {close.index[-1]:%d %b %Y} · {len(m)} stocks scanned" + (f" · {miss} symbols had no data (renamed/delisted?)" if miss > 0 else "")
-           + " · any other company: use the **Find any stock** tab")
+Fh = fund_many(tuple(held)) if research_on and held else {}
+FA = {**Fh, **F}                                       # fundamentals for ideas and holdings
+tops = {k: list(m.dropna(subset=[k + "2"]).sort_values(k + "2", ascending=False).head(topn).index) for k in ("short", "mid", "long")}
 
+# ---------- live prices ----------
+need = [s for s in dict.fromkeys(held + acct.get("watch", []) + order_syms + rec_syms + sum(tops.values(), [])) if s in close_all.columns]
+live = dict(live_prices(tuple(need)))
+mo = E.market_open(now_ist())
+def px(s):
+    if s in live: return float(live[s])
+    return float(close_all[s].dropna().iloc[-1]) if s in close_all.columns else float("nan")
+def prev_close(s):
+    if s not in close_all.columns: return float("nan")
+    c = close_all[s].dropna()
+    if len(c) < 2: return float("nan")
+    return float(c.iloc[-2] if (c.index[-1].date() == now_ist().date() or not mo) else c.iloc[-1])
+def day_pct(s, price=None):
+    price = px(s) if price is None else price; pc = prev_close(s)
+    return (price / pc - 1) * 100 if pc == pc and pc and price == price else float("nan")
+def price_of(sym):
+    v = px(sym)
+    if v == v: return v
+    d = load_extra((sym,))
+    return float(d[sym].dropna().iloc[-1]) if len(d.columns) and sym in d.columns else float("nan")
+
+# ---------- trading ----------
+def trade(sym, side, qty, price, stop=None, target=None, product="DELIVERY", horizon=None):
+    pos, _ = E.positions(acct["trades"]); cash = E.cash_balance(acct["start_cash"], acct["trades"]); qty = int(qty)
+    if qty < 1: return "Quantity must be at least 1."
+    if not price == price or price <= 0: return "No price available for this symbol."
+    if side == "BUY" and qty * price > cash: return f"Not enough virtual cash (₹{cash:,.0f} available)."
+    if side == "SELL" and pos.get(sym, {}).get("qty", 0) < qty: return "You don't hold that many shares."
+    if side == "BUY" and sym in pos and pos[sym].get("product", "DELIVERY") != product:
+        return f"You already hold {sym} as {pos[sym]['product'].title()}. Use the same product."
+    acct["trades"].append(dict(ts=now_ist().replace(tzinfo=None).isoformat(timespec="seconds"), symbol=sym, side=side, qty=qty,
+                               price=round(float(price), 2), stop=stop, target=target, product=product, horizon=horizon))
+    lv = acct.setdefault("levels", {})
+    if side == "BUY" and (stop or target): lv.pop(sym, None)
+    if side == "SELL" and sym not in E.positions(acct["trades"])[0]: lv.pop(sym, None)
+    save(); return None
+
+def run_orders():
+    """Pending limit orders, intraday square-off (3:20 PM) and stop-loss / target auto-sell."""
+    msgs, t = [], now_ist()
+    for o in list(acct.get("orders", [])):
+        last = px(o["symbol"])
+        if last != last: continue
+        if (last <= o["limit"]) if o["side"] == "BUY" else (last >= o["limit"]):
+            err = trade(o["symbol"], o["side"], o["qty"], last, o.get("stop"), o.get("target"), o.get("product", "DELIVERY"), o.get("horizon"))
+            acct["orders"].remove(o); save()
+            msgs.append(f"✅ Limit {o['side'].lower()} {o['qty']} {o['symbol']} filled @ ₹{last:,.2f}" if not err else f"⚠️ Limit order for {o['symbol']} rejected: {err}")
+    for s, p in E.positions(acct["trades"])[0].items():
+        last = px(s)
+        if p.get("product") == "INTRADAY" and last == last and (pd.Timestamp(p["since"]).date() < t.date() or (t.weekday() < 5 and t.time() >= dt.time(15, 20))):
+            if not trade(s, "SELL", p["qty"], last, product="INTRADAY"): msgs.append(f"⏰ {s}: intraday position squared off @ ₹{last:,.2f}")
+    if auto_exec:
+        for s, p in get_pos()[0].items():
+            q, last = p["qty"], px(s)
+            if last != last: continue
+            if p["stop"] and last <= p["stop"] and not trade(s, "SELL", q, last, product=p.get("product", "DELIVERY")): msgs.append(f"🛑 {s}: stop-loss hit, sold {q} @ ₹{last:,.2f}")
+            elif p["target"] and last >= p["target"] and not trade(s, "SELL", q, last, product=p.get("product", "DELIVERY")): msgs.append(f"🎯 {s}: target hit, sold {q} @ ₹{last:,.2f}")
+    return msgs
+
+_msgs = run_orders()
+if _msgs:
+    for _m in _msgs: st.toast(_m)
+    st.session_state.msgs = _msgs; st.rerun()
+for _m in st.session_state.pop("msgs", []): st.info(_m)
+
+# ---------- portfolio numbers (used by Portfolio, AI review and the live bar) ----------
+pos, realised = get_pos()
+ltp = {s: px(s) for s in pos}
+perf = E.performance(acct["trades"], acct["start_cash"], ltp)
+mh = E.metrics(close_all[[s for s in pos if s in close_all.columns]], min_len=3) if pos else pd.DataFrame()
+
+def build_rows():
+    rows = []
+    for s, p in pos.items():
+        avg = p["cost"] / p["qty"]; last = ltp[s] if ltp[s] == ltp[s] else avg
+        cur = p["qty"] * last; pc = prev_close(s)
+        d_pnl = (last - pc) * p["qty"] if pc == pc else 0.0
+        sig, why = E.signal(mh.loc[s], last, p["stop"], p["target"]) if s in mh.index else ("HOLD", "Not enough price history yet")
+        f = FA.get(s) or {}
+        rows.append(dict(symbol=s, name=f.get("name"), qty=p["qty"], avg=avg, ltp=last, invested=p["cost"], current=cur,
+                         pnl=cur - p["cost"], pnl_pct=(cur / p["cost"] - 1) * 100 if p["cost"] else 0.0,
+                         day_pnl=d_pnl, day_pct=(last / pc - 1) * 100 if pc == pc and pc else float("nan"),
+                         stop=p["stop"], target=p["target"], horizon=p.get("horizon"), product=p.get("product"), since=p["since"],
+                         signal=sig, reason=why, tags=E.tags_for(mh.loc[s], f)[:3] if s in mh.index else []))
+    tot = sum(r["current"] for r in rows) or 1.0
+    for r in rows: r["weight"] = r["current"] / tot * 100
+    return rows
+rows = build_rows()
+day_total = sum(r["day_pnl"] for r in rows)
+day_total_pct = day_total / (perf["current"] - day_total) * 100 if perf["current"] - day_total > 0 else 0.0
+
+# live net-worth points for this session (Portfolio > Growth)
+_ls = st.session_state.setdefault(f"live_series_{user}", [])
+if acct["trades"] and (not _ls or time.time() - _ls[-1][0] >= 10):
+    _ls.append((time.time(), perf["net"])); del _ls[:-600]
+
+# ======================================================================
+# Windows (dialogs), shared pieces and the live bar
+# ======================================================================
 snap = market_snapshot()
-if snap:
-    with st.expander("🌍 Market & global context"):
-        cols = st.columns(3)
-        for i, (k, (v, d)) in enumerate(snap.items()): cols[i % 3].metric(k, f"{v:,.2f}", f"{d:+.1f}%")
+pc_ = lambda x: "n/a" if x is None or pd.isna(x) else f"{x*100:+.0f}%"
+HZ_REV = {v: k for k, v in HZ.items()}
 
-pct = lambda x: "n/a" if x is None or pd.isna(x) else f"{x*100:+.0f}%"
 def fund_lines(f, price):
     a = []
     if f.get("rec"): a.append(f"Analysts: **{str(f['rec']).replace('_', ' ')}**" + (f" ({f['n_an']} analysts)" if f.get("n_an") else ""))
@@ -216,77 +327,174 @@ def build_context():
     n = lambda x, f="{:.0f}": "n/a" if x is None or x != x else f.format(x)
     L = [f"As of {close.index[-1]:%d %b %Y}."]
     if snap: L.append("Market snapshot: " + "; ".join(f"{k} {v:,.2f} ({d:+.1f}% 1d)" for k, (v, d) in snap.items()))
-    for col, name in (("short2", "1-month shortlist"), ("long2", "1-year shortlist")):
-        rows = []
+    for col, name in (("short2", "1-month shortlist"), ("mid2", "6-month shortlist"), ("long2", "1-year shortlist")):
+        out = []
         for s, r in m.dropna(subset=[col]).sort_values(col, ascending=False).head(8).iterrows():
             f = F.get(s) or {}
             x = f"{s}: price {r.price:.0f}, 1M {n(r.r1m*100)}%, 3M {n(r.r3m*100)}%, RSI {n(r.rsi)}, volatility {n(r.vol*100)}%"
             if f: x += f"; analysts {f.get('rec')} (mean target {n(f.get('target'))}); {fin_lines(f)}"
-            rows.append(x)
-        L.append(f"{name} from the app's screen:\n" + "\n".join(rows))
-    pos_, _ = E.positions(acct["trades"])
-    L.append("Demo holdings: " + (", ".join(f"{k} x{v['qty']} avg {v['cost']/v['qty']:.0f}" for k, v in pos_.items()) or "none"))
+            out.append(x)
+        L.append(f"{name} from the app's screen:\n" + "\n".join(out))
+    L.append("Demo holdings: " + (", ".join(f"{r['symbol']} x{r['qty']} avg {r['avg']:.0f} now {r['ltp']:.0f}" for r in rows) or "none"))
     if st.session_state.get("scan_ctx"): L.append(st.session_state["scan_ctx"])
     if acct.get("notes"): L.append("My own notes on news / policy / events:\n" + acct["notes"])
     return "\n".join(L)
 
-def show(kind, col, months, gain):
-    top = m.dropna(subset=[col + "2"]).sort_values(col + "2", ascending=False).head(topn)
-    for n_, (sym, r) in enumerate(top.iterrows()):
-        f = F.get(sym) or {}
-        r = r.copy(); price = px(sym); r["price"] = price if price == price else r.price; price = r["price"]
-        p = E.plan(r, capital, risk, kind, f.get("target"))
-        with st.container(border=True, key=f"card_{kind}_{n_}"):
-            a, b = st.columns([3, 1]); a.subheader(sym); b.metric("Score", f"{r[col + '2']:.0f}")
-            if f.get("name"): a.caption(f"{f['name']}" + (f" · {f['sector']}" if f.get("sector") else ""))
-            st.write(f"**{p['action']}** · Entry ₹{p['entry']:,.0f} · Stop-loss ₹{p['stop']:,.0f} · Target ₹{p['target']:,.0f}")
-            st.write(f"Suggested qty **{p['qty']}** (≈₹{p['invest']:,.0f}); worst case loss at stop ≈ ₹{p['max_loss']:,.0f}")
-            st.caption(f"1M {pct(r.r1m)} · 3M {pct(r.r3m)} · 12M {pct(r.r12m)} · RSI {r.rsi:.0f} · volatility {r.vol*100:.0f}%")
-            if fund_lines(f, price): st.write(fund_lines(f, price))
-            st.caption(f"Model odds of ≥{gain}% in {months} month(s): **{E.p_hit(gain, r.vol, months)*100:.0f}%**")
-            if st.checkbox("🔍 Financials & latest news", key=f"rs_{kind}_{n_}"):
-                st.write(fin_lines(f) or "No results data available from Yahoo for this stock.")
-                for h in news(sym) or ["No recent headlines found."]: st.caption("• " + h)
-            if p["qty"] >= 1 and st.button(f"🧪 Demo buy {p['qty']} @ ₹{price:,.2f} (with stop & target)", key=f"b_{kind}_{n_}"):
-                err = trade(sym, "BUY", p["qty"], price, round(p["stop"], 2), round(p["target"], 2))
-                st.error(err) if err else (st.success("Demo order placed. See the Demo portfolio tab."), st.rerun())
+def copy_open_gemini(prompt, height=110):
+    tj = json.dumps(prompt).replace("</", "<\\/")
+    components.html(f"""<div style="display:flex;gap:8px">
+<button id="c" style="flex:1;padding:12px;border:0;border-radius:10px;background:#00b386;color:#fff;font:600 15px system-ui">📋 Copy prompt</button>
+<button id="o" style="flex:1;padding:12px;border:0;border-radius:10px;background:#5367ff;color:#fff;font:600 15px system-ui">🚀 Copy + open Gemini</button></div>
+<div id="m" style="font:14px system-ui;margin-top:8px;color:#555"></div>
+<script>const t={tj};const $=i=>document.getElementById(i);
+async function cp(){{if(window.Android&&Android.copy){{try{{Android.copy(t);return true}}catch(e){{}}}}
+try{{await navigator.clipboard.writeText(t);return true}}catch(e){{}}
+try{{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand('copy');a.remove();return ok}}catch(e){{return false}}}}
+$('c').onclick=async()=>{{$('m').textContent=(await cp())?'✅ Copied. Now open Gemini and paste.':'⚠️ Copy failed: open Show prompt text below and long-press to copy.'}};
+$('o').onclick=async()=>{{const ok=await cp();$('m').textContent=ok?'✅ Prompt copied. Opening Gemini, paste it there.':'Opening Gemini… (copy the prompt from Show prompt text below)';
+if(window.Android&&Android.openGemini){{Android.openGemini()}}
+else if(/Android/i.test(navigator.userAgent)){{window.open('intent://gemini.google.com/app#Intent;scheme=https;package=com.google.android.apps.bard;S.browser_fallback_url=https%3A%2F%2Fgemini.google.com%2Fapp;end','_top')}}
+else{{window.open('https://gemini.google.com/app','_blank')}}}};</script>""", height=height)
+    st.link_button("🌐 Open Gemini in browser instead", "https://gemini.google.com/app", use_container_width=True)
 
-def analyze(sym):
-    df = load_extra((sym,))
-    if df.empty or sym not in df.columns:
-        st.error("No price data found for this symbol on NSE/BSE. Check the symbol or try the BSE code."); return
-    mm = E.metrics(df, min_len=3)
-    if sym not in mm.index: st.error("Not enough price history yet."); return
-    r = mm.loc[sym].copy(); ndays = int(df[sym].notna().sum())
-    lp = live_prices((sym,)).get(sym); r["price"] = float(lp) if lp else r.price
-    f = fund_many((sym,)).get(sym) or {}
-    with st.container(border=True, key=f"card_find_{sym}"):
-        st.subheader(f"{sym}" + (f" · {f['name']}" if f.get("name") else ""))
-        st.metric("Price", f"₹{r.price:,.2f}")
-        if ndays < 130: st.warning(f"🆕 New listing: only {ndays} trading days of history, so momentum numbers are rough.")
-        st.caption(f"1M {pct(r.r1m)} · 3M {pct(r.r3m)} · 12M {pct(r.r12m)} · RSI {'n/a' if r.rsi != r.rsi else f'{r.rsi:.0f}'} · volatility {'n/a' if r.vol != r.vol else f'{r.vol*100:.0f}%'}")
-        if fund_lines(f, r.price): st.write(fund_lines(f, r.price))
-        if fin_lines(f): st.write(fin_lines(f))
-        vol = r.vol if r.vol == r.vol else 0.4
-        for kind, label in (("short", "1‑month plan"), ("long", "1‑year plan")):
-            p = E.plan(r, capital, risk, kind, f.get("target"))
-            st.write(f"**{label}:** {p['action']} · Entry ₹{p['entry']:,.0f} · Stop ₹{p['stop']:,.0f} · Target ₹{p['target']:,.0f} · qty {p['qty']}")
-        st.caption(f"Model odds of ≥10% in 1 month: {E.p_hit(10, vol, 1)*100:.0f}% · ≥100% in 1 year: {E.p_hit(100, vol, 12)*100:.0f}%")
-        for h in news(sym)[:4]: st.caption("• " + h)
-        pl = E.plan(r, capital, risk, "short", None)
-        q = st.number_input("Quantity", 1, 10000000, max(pl["qty"], 1), key=f"fq_{sym}")
+def style_df(df, pnl=(), side=None, fmt=None):
+    """Colour profit green / loss red (and BUY green / SELL red) in a table; falls back to the plain table."""
+    try:
+        sty = df.style; mp = sty.map if hasattr(sty, "map") else sty.applymap
+        if pnl: sty = mp(lambda v: f"color:{U.UP};font-weight:600" if isinstance(v, (int, float)) and v > 0 else f"color:{U.DOWN};font-weight:600" if isinstance(v, (int, float)) and v < 0 else "", subset=list(pnl))
+        if side:
+            mp = sty.map if hasattr(sty, "map") else sty.applymap
+            sty = mp(lambda v: f"color:{U.UP};font-weight:700" if v == "BUY" else f"color:{U.DOWN};font-weight:700" if v == "SELL" else "", subset=[side])
+        return sty.format(fmt or {}, na_rep="–")
+    except Exception:
+        return df
+
+# ---------- live bar: market status, indices, countdown, refresh ----------
+_l1, _l2, _l3 = st.columns([5, 4, 1.4], vertical_alignment="center")
+_l1.markdown(U.live_bar_html(mo, index_quotes(), now_ist().strftime("%H:%M:%S IST")), unsafe_allow_html=True)
+with _l2: components.html(U.countdown_html(every if auto_on else 0, NONCE, True), height=36)
+_l3.button("🔄 Refresh", key="live_refresh", on_click=refresh_now, use_container_width=True)
+
+# ---------- Buy window (like Groww: product, order type, quantity, price) ----------
+@st.dialog("Buy")
+def buy_dialog(sym, name, price, dpct, stop=None, target=None, qty=1, horizon="1M"):
+    p0 = get_pos()[0].get(sym); k = f"bd_{sym}_"
+    st.markdown(U.dialog_head_html(sym, name, price, dpct, p0["qty"] if p0 else 0, p0["cost"] / p0["qty"] if p0 else None), unsafe_allow_html=True)
+    prod = st.radio("Product", ["Delivery", "Intraday"], horizontal=True, key=k + "prod",
+                    help="Delivery: keep the shares as long as you like. Intraday: sold automatically at 3:20 PM.")
+    if prod == "Intraday" and not mo:
+        st.warning("Intraday orders are accepted only while the market is open (9:15 AM to 3:15 PM, Mon-Fri).")
+    otype = st.radio("Order type", ["Market", "Limit"], horizontal=True, key=k + "type",
+                     help="Market: buy now at the current price. Limit: wait until the price falls to your price (checked whenever the app is open).")
+    c1, c2 = st.columns(2)
+    q = c1.number_input("Quantity", 1, 10_000_000, int(max(qty, 1)), key=k + "qty")
+    if otype == "Limit": lim = c2.number_input("Limit price (₹)", 0.05, 10_000_000.0, float(round(price, 2)), step=0.05, key=k + "lim")
+    else: lim = None; c2.text_input("Price", "At market", disabled=True, key=k + "mk")
+    hz = st.radio("Investment horizon", list(HZ.values()), index=list(HZ).index(horizon) if horizon in HZ else 0, horizontal=True, key=k + "hz")
+    with st.expander("Stop-loss & target (optional)", expanded=bool(stop or target)):
+        sl = st.number_input("Stop-loss (₹): sells automatically if the price falls to it", 0.0, 10_000_000.0, float(round(stop, 2)) if stop else 0.0, step=0.05, key=k + "sl")
+        tg = st.number_input("Target (₹): sells automatically when the price reaches it", 0.0, 10_000_000.0, float(round(target, 2)) if target else 0.0, step=0.05, key=k + "tg")
+    at = lim or price; need = q * at; cash_ = E.cash_balance(acct["start_cash"], acct["trades"])
+    st.markdown(U.order_box_html([("Order value", U.esc(U.inr(need))), ("Available cash", U.esc(U.inr(cash_))),
+                                  ("Cash after order", f'<span class="gw-{"up" if cash_ >= need else "down"}">{U.esc(U.inr(cash_ - need))}</span>')]), unsafe_allow_html=True)
+    errs = []
+    if sl and sl >= at: errs.append("Stop-loss must be below the buy price.")
+    if tg and tg <= at: errs.append("Target must be above the buy price.")
+    if need > cash_: errs.append("Not enough virtual cash for this order.")
+    for e_ in errs: st.error(e_)
+    if st.button(f"Buy {q} share{'s' if q != 1 else ''}" + (" (limit order)" if lim else ""), type="primary", key="exec_buy", use_container_width=True, disabled=bool(errs)):
+        product = "INTRADAY" if prod == "Intraday" else "DELIVERY"
+        if product == "INTRADAY" and not mo: st.error("The market is closed, so an intraday order can't be placed."); return
+        if lim:
+            acct.setdefault("orders", []).append(dict(id=int(time.time() * 1000), ts=now_ist().strftime("%d %b %H:%M"), symbol=sym, side="BUY", qty=int(q),
+                                                      limit=float(lim), product=product, stop=sl or None, target=tg or None, horizon=HZ_REV[hz]))
+            save(); flash(f"🕒 Limit order placed: buy {q} {sym} at ₹{lim:,.2f} or lower")
+        else:
+            fresh = live_prices((sym,)).get(sym); fill = float(fresh) if fresh else price
+            err = trade(sym, "BUY", q, fill, sl or None, tg or None, product, HZ_REV[hz])
+            if err: st.error(err); return
+            flash(f"✅ Bought {q} {sym} @ ₹{fill:,.2f}")
+        st.rerun()
+
+# ---------- Sell window ----------
+@st.dialog("Sell")
+def sell_dialog(sym, name, price, dpct, qty=None):
+    p = get_pos()[0].get(sym); k = f"sd_{sym}_"
+    if not p: st.info("You don't hold this stock."); return
+    avg = p["cost"] / p["qty"]
+    st.markdown(U.dialog_head_html(sym, name, price, dpct, p["qty"], avg), unsafe_allow_html=True)
+    mode = st.radio("Quantity", ["All shares", "Some shares"], horizontal=True, index=1 if qty and qty < p["qty"] else 0, key=k + "mode")
+    q = p["qty"] if mode == "All shares" else st.number_input("Shares to sell", 1, p["qty"], int(min(max(qty or 1, 1), p["qty"])), key=k + "q")
+    otype = st.radio("Order type", ["Market", "Limit"], horizontal=True, key=k + "type",
+                     help="Market: sell now at the current price. Limit: wait until the price rises to your price (checked whenever the app is open).")
+    lim = st.number_input("Limit price (₹)", 0.05, 10_000_000.0, float(round(price, 2)), step=0.05, key=k + "lim") if otype == "Limit" else None
+    at = lim or price; pnl_ = (at - avg) * q
+    st.markdown(U.order_box_html([("Buy price (avg)", U.esc(U.inr(avg))), ("Sell price", U.esc(U.inr(at)) if lim else "At market ≈ " + U.esc(U.inr(at))),
+                                  ("You receive", U.esc(U.inr(q * at))), ("Profit / loss", U.pnl_html(pnl_, (at / avg - 1) * 100))]), unsafe_allow_html=True)
+    if st.button(f"Sell {q} share{'s' if q != 1 else ''}" + (" (limit order)" if lim else ""), key="exec_sell", use_container_width=True):
+        if lim:
+            acct.setdefault("orders", []).append(dict(id=int(time.time() * 1000), ts=now_ist().strftime("%d %b %H:%M"), symbol=sym, side="SELL", qty=int(q),
+                                                      limit=float(lim), product=p.get("product", "DELIVERY")))
+            save(); flash(f"🕒 Limit order placed: sell {q} {sym} at ₹{lim:,.2f} or higher")
+        else:
+            fresh = live_prices((sym,)).get(sym); fill = float(fresh) if fresh else price
+            err = trade(sym, "SELL", q, fill, product=p.get("product", "DELIVERY"))
+            if err: st.error(err); return
+            flash(f"✅ Sold {q} {sym} @ ₹{fill:,.2f} · P&L {U.inr((fill - avg) * q, 2, True)} ({U.pct((fill / avg - 1) * 100)})")
+        st.rerun()
+
+def open_buy(sym, name, price, dpct, p=None, kind=None, qty=1):
+    stop = tgt = None
+    if p:   # a "wait for dip" plan is built around the dip price: keep the same distances but measure them from today's price
+        shift = price - p["entry"]
+        stop, tgt = p["stop"] + shift, p["target"] + shift
+        if not (0 < stop < price < tgt): stop = tgt = None
+    buy_dialog(sym, name, price, dpct, round(stop, 2) if stop else None, round(tgt, 2) if tgt else None, max(int(qty), 1), KIND_HZ.get(kind, "1M"))
+
+def watch_button(c, sym, key):
+    w = acct.setdefault("watch", [])
+    if sym in w:
+        if c.button("★ Watching", key=f"wt_{key}", use_container_width=True): w.remove(sym); save(); st.rerun()
+    elif c.button("☆ Watch", key=f"wt_{key}", use_container_width=True): w.append(sym); save(); st.rerun()
+
+# ======================================================================
+# Explore: idea cards, 1M / 6M / 1Y lists, market scan, search
+# ======================================================================
+def idea_card(sym, r, f, kind, ns, i, gain, months, price, dpct, scan=False):
+    r = r.copy(); r["price"] = price
+    p = E.plan(r, capital, risk, kind, f.get("target"))
+    wait = p["action"].startswith("Wait")
+    sig = "SELL" if E.signal(r, price)[0] == "SELL" else ("HOLD" if wait else "BUY")
+    tags = U.hz_chip(KIND_HZ[kind]) + U.action_chip(sig) + U.chips(E.tags_for(r, f, scan)[:4])
+    sub = " · ".join(x for x in (f.get("name"), f.get("sector")) if x)
+    vol = r.vol if r.vol == r.vol else 0.4
+    with st.container(border=True, key=f"card_{ns}_{i}"):
+        st.markdown(U.stock_head_html(sym, sub, price, dpct, tags) + U.levels_html(price, p["entry"], p["stop"], p["target"]), unsafe_allow_html=True)
+        st.caption(f"**{p['action']}** · suggested qty {p['qty']} (≈{U.inr(p['invest'], 0)}) · worst-case loss at stop ≈ {U.inr(p['max_loss'], 0)}")
+        st.caption(f"1M {pc_(r.r1m)} · 3M {pc_(r.r3m)} · 6M {pc_(r.r6m)} · 12M {pc_(r.r12m)} · RSI {r.rsi:.0f} · volatility {vol*100:.0f}%"
+                   + (f" · {(price/r.hi52-1)*100:.0f}% from 52-week high" if r.hi52 == r.hi52 and r.hi52 else ""))
+        if scan: st.caption(f"Avg daily traded value ₹{r.avg_val/1e7:.1f} cr" + (" · thinly traded, use limit orders and small size" if r.avg_val < 5e7 else ""))
+        if fund_lines(f, price): st.write(fund_lines(f, price))
+        st.caption(f"Model odds of ≥{gain}% in {months} month(s): **{E.p_hit(gain, vol, months)*100:.0f}%**")
+        if st.checkbox("🔍 Financials & latest news", key=f"rs_{ns}_{i}"):
+            st.write(fin_lines(f) or "No results data available from Yahoo for this stock.")
+            for h in news(sym) or ["No recent headlines found."]: st.caption("• " + h)
         c1, c2 = st.columns(2)
-        if c1.button("🧪 Demo buy", key=f"fb_{sym}"):
-            err = trade(sym, "BUY", q, r.price, round(pl["stop"], 2), round(pl["target"], 2))
-            st.error(err) if err else (st.success("Demo order placed."), st.rerun())
-        w = acct.setdefault("watch", [])
-        if sym in w:
-            if c2.button("➖ Remove from watchlist", key=f"fw_{sym}"): w.remove(sym); save(); st.rerun()
-        elif c2.button("➕ Add to watchlist", key=f"fw_{sym}"): w.append(sym); save(); st.rerun()
+        if c1.button("Buy", key=f"buy_{ns}_{i}", type="primary", use_container_width=True): open_buy(sym, f.get("name"), price, dpct, p, kind, p["qty"])
+        watch_button(c2, sym, f"{ns}_{i}")
 
-SCOPES = {"Nifty 500 (~500 stocks, fastest)": ["ind_nifty500list.csv"],
+def show_ideas(kind, ns, months, gain, blurb):
+    col = kind + "2"
+    top = m.dropna(subset=[col]).sort_values(col, ascending=False).head(topn)
+    st.caption(blurb + f" Top {len(top)} of {len(m)} stocks, ranked by trend, analyst ratings and results.")
+    cols = st.columns(2)
+    for n_, (sym, r) in enumerate(top.iterrows()):
+        price = px(sym); price = price if price == price else r.price
+        with cols[n_ % 2]: idea_card(sym, r, FA.get(sym) or {}, kind, ns, n_, gain, months, price, day_pct(sym, price))
+
+SCOPES = {"Every NSE-listed stock (~2,000+ companies)": ["EQUITY_L"],
           "Nifty 500 + Microcap 250 (~750)": ["ind_nifty500list.csv", "ind_niftymicrocap250_list.csv"],
-          "Every NSE-listed stock (~2,000+, slowest)": ["EQUITY_L"]}
+          "Nifty 500 (~500, fastest)": ["ind_nifty500list.csv"]}
 os.makedirs("scan_cache", exist_ok=True)
 def scan_path(scope): return "scan_cache/" + re.sub(r"[^a-z0-9]", "", scope.lower())[:24] + ".csv"
 
@@ -306,73 +514,87 @@ def nse_symbols(scope):
     return list(dict.fromkeys(syms))
 
 def run_scan(symbols, prog):
-    start = (dt.date.today() - dt.timedelta(days=400)).isoformat(); n, step, parts = len(symbols), 100, []
+    start = (dt.date.today() - dt.timedelta(days=400)).isoformat(); n, step, parts, t0 = len(symbols), 100, [], time.time()
     for i in range(0, n, step):
-        prog.progress(min((i + step) / n, 1.0), text=f"Scanning {min(i + step, n)} of {n} stocks…")
-        try:
-            df = yf.download([x + ".NS" for x in symbols[i:i + step]], start=start, auto_adjust=True, progress=False, threads=True)
-            if df is None or df.empty: continue
-            c, v = df["Close"], df["Volume"]
-            if isinstance(c, pd.Series): continue
-            c.columns = [x.replace(".NS", "") for x in c.columns]; v.columns = [x.replace(".NS", "") for x in v.columns]
-            c.index = pd.to_datetime(c.index).tz_localize(None); v.index = c.index
-            parts.append(E.metrics(c.dropna(axis=1, how="all"), min_len=60, volume=v))
-        except Exception: continue
+        done = i / n; eta = (time.time() - t0) / done * (1 - done) if done > 0.02 else None
+        prog.progress(min(done + 0.001, 1.0), text=f"Scanning stocks {i + 1}–{min(i + step, n)} of {n}" + (f" · about {int(eta // 60)} min {int(eta % 60)} s left" if eta else ""))
+        for attempt in (1, 2):
+            try:
+                df = yf.download([x + ".NS" for x in symbols[i:i + step]], start=start, auto_adjust=True, progress=False, threads=True)
+                if df is None or df.empty: continue
+                c, v = df["Close"], df["Volume"]
+                if isinstance(c, pd.Series): break
+                c.columns = [x.replace(".NS", "") for x in c.columns]; v.columns = [x.replace(".NS", "") for x in v.columns]
+                c.index = pd.to_datetime(c.index).tz_localize(None); v.index = c.index
+                parts.append(E.metrics(c.dropna(axis=1, how="all"), min_len=60, volume=v)); break
+            except Exception: time.sleep(1.5)
     return pd.concat(parts) if parts else pd.DataFrame()
 
-tm, t1, t2, tf, t3, t5, t4 = st.tabs(["🚀 Market scan", "1‑Month ideas", "1‑Year ideas", "🔎 Find any stock", "💼 Demo portfolio", "🤖 Ask Gemini", "Backtest"])
-with tm:
-    st.write("Scans the **whole market**, not a fixed list, for stocks with the highest realistic return potential that are still **feasible to trade** (liquidity and price filters).")
+def scan_view():
     c1, c2 = st.columns(2)
-    scope = c1.selectbox("Scan scope", list(SCOPES)); profile = c2.selectbox("Risk appetite", list(E.PROFILES))
+    scope = c1.selectbox("1 · Which companies?", list(SCOPES)); profile = c2.selectbox("2 · Risk appetite", list(E.PROFILES))
     st.caption("Higher return potential means higher risk. 'Aggressive' includes small and micro caps that trade thinly. Nobody can guarantee returns.")
-    path_s = scan_path(scope)
-    if st.button("🚀 Run market-wide scan", type="primary", use_container_width=True):
-        syms = nse_symbols(scope)
-        if not syms: st.warning("Couldn't download NSE's stock list, so the built-in broad list is used."); syms = E.BROAD
+    path_s = scan_path(scope); syms = None
+    with st.expander("Stock list not downloading? Upload NSE's EQUITY_L.csv instead"):
+        up = st.file_uploader("EQUITY_L.csv (from nseindia.com > Market Data > Securities available for trading)", type="csv", key="eq_up")
+        if up is not None: syms = E.parse_symbol_csv(up.getvalue().decode("utf-8", "ignore"))
+    if st.button("🚀 3 · Scan now", type="primary", use_container_width=True, key="scan_go"):
+        syms = syms or nse_symbols(scope)
+        if not syms: st.warning("Couldn't download NSE's stock list, so the built-in broad list (~230 stocks) is used."); syms = E.BROAD
         prog = st.progress(0.0, text="Starting…")
         res = run_scan(syms, prog); prog.empty()
         if res.empty: st.error("No price data came back (Yahoo may be busy). Try again in a few minutes.")
         else: res.to_csv(path_s); st.rerun()
-    if os.path.exists(path_s):
-        sdf = pd.read_csv(path_s, index_col=0)
-        pot = E.potential(sdf, profile).dropna(subset=["pot"]).sort_values("pot", ascending=False)
-        st.caption(f"Scan from {dt.datetime.fromtimestamp(os.path.getmtime(path_s)):%d %b %Y %H:%M} · {len(sdf)} stocks scanned · {len(pot)} pass the '{profile}' liquidity filter. Re-run for fresh prices.")
-        top = pot.head(30)
-        F2 = fund_many(tuple(top.index)) if research_on and len(top) else {}
-        if len(top):
-            bl = E.blend(top.assign(short=top.pot, long=top.pot), F2)
-            top = top.assign(pot2=np.where(bl["fund"].notna(), 0.7 * top.pot + 0.3 * bl["fund"], top.pot)).sort_values("pot2", ascending=False).head(topn)
-        n_ = lambda x, f="{:.0f}": "n/a" if x is None or x != x else f.format(x)
-        st.session_state["scan_ctx"] = (f"Market-wide scan top picks ({profile}, from {len(sdf)} NSE stocks): " + "; ".join(
-            f"{k}: price {r.price:.0f}, 1M {n_(r.r1m*100)}%, 3M {n_(r.r3m*100)}%, volatility {n_(r.vol*100)}%, avg traded value Rs {r.avg_val/1e7:.1f} cr"
-            for k, r in top.head(10).iterrows())) if len(top) else ""
-        for i, (sym, r) in enumerate(top.iterrows()):
-            f = F2.get(sym) or {}; price = float(r.price); pl = E.plan(r, capital, risk, "short")
-            risk_l = "Very high risk" if r.vol >= 0.7 else "High risk" if r.vol >= 0.45 else "Medium risk"
-            with st.container(border=True, key=f"card_scan_{i}"):
-                a, b2 = st.columns([3, 1]); a.subheader(sym); b2.metric("Potential", f"{r.pot2:.0f}")
-                a.caption(" · ".join(x for x in (f.get("name"), f.get("sector"), risk_l) if x))
-                st.write(f"**{pl['action']}** · Entry ₹{pl['entry']:,.2f} · Stop-loss ₹{pl['stop']:,.2f} · Target ₹{pl['target']:,.2f} · qty {pl['qty']}")
-                st.caption(f"1M {pct(r.r1m)} · 3M {pct(r.r3m)} · 6M {pct(r.r6m)} · {(price/r.hi52-1)*100:.0f}% from 52w high · volume surge x{n_(r.vsurge, '{:.1f}')} · volatility {r.vol*100:.0f}%")
-                st.caption(f"Avg daily traded value ₹{r.avg_val/1e7:.1f} cr" + (" · thinly traded, use limit orders and small size" if r.avg_val < 5e7 else ""))
-                if fund_lines(f, price): st.write(fund_lines(f, price))
-                st.caption(f"Model odds of ≥+20% in 1 month: **{E.p_hit(20, r.vol, 1)*100:.0f}%** · ≥+100% in 1 year: **{E.p_hit(100, r.vol, 12)*100:.0f}%**")
-                if st.checkbox("🔍 Financials & latest news", key=f"rs_scan_{i}"):
-                    st.write(fin_lines(f) or "No results data available from Yahoo for this stock.")
-                    for h in news(sym) or ["No recent headlines found."]: st.caption("• " + h)
-                if pl["qty"] >= 1 and st.button(f"🧪 Demo buy {pl['qty']} @ ₹{price:,.2f}", key=f"b_scan_{i}"):
-                    err = trade(sym, "BUY", pl["qty"], price, round(pl["stop"], 2), round(pl["target"], 2))
-                    st.error(err) if err else (st.success("Demo order placed. See the Demo portfolio tab."), st.rerun())
-    else:
-        st.info("No scan yet. Tap **Run market-wide scan**. The first run can take a few minutes, so keep the app open; later opens are instant.")
+    if not os.path.exists(path_s):
+        st.info("No scan yet. Tap **Scan now**. The full market (~2,000 companies) takes a few minutes: keep the app open. Later visits are instant."); return
+    sdf = pd.read_csv(path_s, index_col=0)
+    hz = st.radio("4 · Rank by", list(HZ.values()), horizontal=True, key="scan_hz"); kind = {"1M": "short", "6M": "mid", "1Y": "long"}[HZ_REV[hz]]
+    sc = {"short": "p1m", "mid": "p6m", "long": "p1y"}[kind]
+    pot = E.potential(sdf, profile)
+    pot = pot.dropna(subset=["pot"]).sort_values(sc, ascending=False) if sc in pot else pot.iloc[0:0]
+    st.caption(f"Scan from {dt.datetime.fromtimestamp(os.path.getmtime(path_s)):%d %b %Y %H:%M} · {len(sdf)} stocks scanned · {len(pot)} pass the '{profile}' liquidity filter. Scan again for fresh prices.")
+    top = pot.head(30); F2 = fund_many(tuple(top.index)) if research_on and len(top) else {}
+    if not len(top): st.warning("No stocks passed the filter."); return
+    bl = E.blend(top.assign(short=top[sc], mid=top[sc], long=top[sc]), F2)
+    top = top.assign(final=np.where(bl["fund"].notna(), 0.7 * top[sc] + 0.3 * bl["fund"], top[sc])).sort_values("final", ascending=False).head(topn)
+    live.update(live_prices(tuple(top.index)))
+    n_ = lambda x, f="{:.0f}": "n/a" if x is None or x != x else f.format(x)
+    st.session_state["scan_ctx"] = (f"Market-wide scan top picks ({profile}, {hz}, from {len(sdf)} NSE stocks): " + "; ".join(
+        f"{k}: price {r.price:.0f}, 1M {n_(r.r1m*100)}%, 3M {n_(r.r3m*100)}%, volatility {n_(r.vol*100)}%, avg traded value Rs {r.avg_val/1e7:.1f} cr"
+        for k, r in top.head(10).iterrows()))
+    months, gain = {"short": (1, 20), "mid": (6, 40), "long": (12, 100)}[kind]
+    cols = st.columns(2)
+    for i, (sym, r) in enumerate(top.iterrows()):
+        price = float(live.get(sym) or r.price)
+        with cols[i % 2]: idea_card(sym, r, F2.get(sym) or {}, kind, "scan", i, gain, months, price, None, scan=True)
 
-with t1: show("short", "short", 1, 10)
-with t2: show("long", "long", 12, 100)
+def analyze(sym):
+    df = load_extra((sym,))
+    if df.empty or sym not in df.columns:
+        st.error("No price data found for this symbol on NSE/BSE. Check the symbol or try the BSE code."); return
+    mm = E.metrics(df, min_len=3)
+    if sym not in mm.index: st.error("Not enough price history yet."); return
+    r = mm.loc[sym].copy(); ndays = int(df[sym].notna().sum()); s_ = df[sym].dropna()
+    lp = live_prices((sym,)).get(sym); r["price"] = float(lp) if lp else r.price; price = r.price
+    dpc = (price / (s_.iloc[-2] if len(s_) > 1 and (s_.index[-1].date() == now_ist().date() or not mo) else s_.iloc[-1]) - 1) * 100 if len(s_) > 1 else float("nan")
+    f = fund_many((sym,)).get(sym) or {}; vol = r.vol if r.vol == r.vol else 0.4
+    with st.container(border=True, key=f"card_find_{sym}"):
+        st.markdown(U.stock_head_html(sym, f.get("name"), price, dpc, U.chips(E.tags_for(r, f)[:4] + ([("New listing", "info")] if ndays < 130 else []))), unsafe_allow_html=True)
+        if ndays < 130: st.warning(f"🆕 New listing: only {ndays} trading days of history, so momentum numbers are rough.")
+        st.caption(f"1M {pc_(r.r1m)} · 3M {pc_(r.r3m)} · 12M {pc_(r.r12m)} · RSI {'n/a' if r.rsi != r.rsi else f'{r.rsi:.0f}'} · volatility {vol*100:.0f}%")
+        if fund_lines(f, price): st.write(fund_lines(f, price))
+        if fin_lines(f): st.write(fin_lines(f))
+        for kind, label in (("short", "1 month"), ("mid", "6 months"), ("long", "1 year")):
+            p = E.plan(r, capital, risk, kind, f.get("target")); sig = "SELL" if E.signal(r, price)[0] == "SELL" else ("HOLD" if p["action"].startswith("Wait") else "BUY")
+            st.markdown(f'<div class="gw-chips">{U.hz_chip(KIND_HZ[kind])}{U.action_chip(sig)}<span class="gw-sub">{U.esc(label)} plan · {U.esc(p["action"])} · qty {p["qty"]}</span></div>'
+                        + U.levels_html(price, p["entry"], p["stop"], p["target"]), unsafe_allow_html=True)
+            if st.button(f"Buy for {label}", key=f"fbuy_{sym}_{kind}", use_container_width=True): open_buy(sym, f.get("name"), price, dpc, p, kind, p["qty"])
+        st.caption(f"Model odds of ≥10% in 1 month: {E.p_hit(10, vol, 1)*100:.0f}% · ≥100% in 1 year: {E.p_hit(100, vol, 12)*100:.0f}%")
+        for h in news(sym)[:4]: st.caption("• " + h)
+        watch_button(st, sym, f"find_{sym}")
 
-with tf:
-    st.write("Search **any** NSE/BSE company, including new listings such as Jio Platforms (NSE: JPL, BSE: 545004).")
-    q = st.text_input("Company name, NSE symbol or BSE code", placeholder="e.g. Jio Platforms, JPL, Reliance, 545004")
+def search_view():
+    q = st.text_input("Search any company: name, NSE symbol or BSE code", placeholder="e.g. Jio Platforms, JPL, Reliance, 545004")
     if q.strip():
         hits = search_stocks(q.strip())
         opts = {f"{h['name']} — {h['symbol']} ({'NSE' if h['suffix'] == '.NS' else 'BSE'})": h["symbol"] for h in hits}
@@ -382,111 +604,242 @@ with tf:
         if st.button("Analyze", type="primary"): st.session_state["find"] = opts[pick]
     if st.session_state.get("find"): analyze(st.session_state["find"])
     if acct.get("watch"):
-        st.markdown("#### My watchlist")
-        for s in acct["watch"]:
-            c1, c2 = st.columns([3, 1]); c1.write(f"**{s}**"); c2.write(f"₹{px(s):,.2f}")
-            if c1.button(f"Analyze {s}", key=f"wa_{s}"): st.session_state["find"] = s; st.rerun()
+        st.markdown("#### ⭐ My watchlist")
+        cols = st.columns(2)
+        for i, s in enumerate(list(acct["watch"])):
+            price = price_of(s); dp = day_pct(s, price); nm = (FA.get(s) or {}).get("name")
+            with cols[i % 2], st.container(border=True, key=f"card_watch_{i}"):
+                st.markdown(U.stock_head_html(s, nm, price, dp, ""), unsafe_allow_html=True)
+                b1, b2, b3 = st.columns(3)
+                if b1.button("Buy", key=f"buy_watch_{i}", type="primary", use_container_width=True): open_buy(s, nm, price, dp)
+                if b2.button("Analyze", key=f"wa_{i}", use_container_width=True): st.session_state["find"] = s; st.rerun()
+                if b3.button("Remove", key=f"wr_{i}", use_container_width=True): acct["watch"].remove(s); save(); st.rerun()
 
-with t3:
-    pos, realised = E.positions(acct["trades"]); cash = E.cash_balance(acct["start_cash"], acct["trades"])
-    rows = []
-    for s, p in pos.items():
-        last = px(s); last = last if last == last else p["cost"] / p["qty"]; inv = p["cost"]; cur = p["qty"] * last
-        rows.append({"Stock": s, "Qty": p["qty"], "Avg price": inv / p["qty"], "LTP": last, "Invested": inv,
-                     "Current": cur, "P&L ₹": cur - inv, "P&L %": (cur / inv - 1) * 100, "Stop": p["stop"], "Target": p["target"]})
-    H = pd.DataFrame(rows)
-    inv_t = H["Invested"].sum() if len(H) else 0.0; cur_t = H["Current"].sum() if len(H) else 0.0
-    net = cash + cur_t; total_pl = net - acct["start_cash"]
-    c1, c2 = st.columns(2)
-    c1.metric("Net worth", f"₹{net:,.0f}", f"{total_pl:,.0f} ({total_pl/acct['start_cash']*100:+.2f}%)")
-    c2.metric("Virtual cash", f"₹{cash:,.0f}")
-    c3, c4 = st.columns(2)
-    c3.metric("Holdings value", f"₹{cur_t:,.0f}", f"{cur_t-inv_t:,.0f} unrealised")
-    c4.metric("Realised P&L", f"₹{realised:,.0f}")
+t_ex, t_pf, t_ai, t_tools = st.tabs(["🔎 Explore", "💼 Portfolio", "🤖 Gemini AI", "🛠 Tools"])
+with t_ex:
+    e1, e6, e12, e_scan, e_find = st.tabs(["1 Month", "6 Months", "1 Year", "🚀 Scan all stocks", "🔍 Search & watchlist"])
+    with e1: show_ideas("short", "i1m", 1, 10, "Short-term momentum ideas for about 1 month.")
+    with e6: show_ideas("mid", "i6m", 6, 40, "Medium-term trend ideas for about 6 months.")
+    with e12: show_ideas("long", "i1y", 12, 100, "Long-term strength and stability ideas for about 1 year.")
+    with e_scan:
+        st.write("Scans the **whole market**, not a fixed list, for stocks with the highest realistic return potential that are still **feasible to trade** (liquidity and price filters).")
+        scan_view()
+    with e_find: search_view()
 
-    st.markdown("#### Place a demo order")
-    with st.form("ticket"):
-        sym = st.selectbox("Stock (any company: add it in 'Find any stock' first)", sorted(close_all.columns))
-        side = st.radio("Side", ["BUY", "SELL"], horizontal=True)
-        qty = st.number_input("Quantity", 1, 1000000, 10)
-        st.caption(f"Last price ≈ ₹{px(sym):,.2f} (can be delayed a few minutes) · order value ≈ ₹{qty*px(sym):,.0f}")
-        sl = st.number_input("Stop-loss ₹ (optional, BUY only)", 0.0, value=0.0)
-        tg = st.number_input("Target ₹ (optional, BUY only)", 0.0, value=0.0)
-        if st.form_submit_button("Place order"):
-            err = trade(sym, side, qty, px(sym), sl or None, tg or None)
-            if err: st.error(err)
-            else: st.success(f"{side} {qty} {sym} executed (demo)"); st.rerun()
+# ======================================================================
+# Portfolio
+# ======================================================================
+def holdings_view():
+    st.markdown(U.summary_html(perf, day_total, day_total_pct, len(rows)), unsafe_allow_html=True)
+    if not rows:
+        st.info("No holdings yet. Open **Explore**, pick an idea and tap **Buy**."); return
+    f1, f2 = st.columns(2)
+    sort = f1.selectbox("Sort by", ["Returns %", "Returns ₹", "Today %", "Current value", "A–Z"], key="pf_sort")
+    flt = f2.selectbox("Show", ["All", "1 Month", "6 Months", "1 Year", "In profit", "In loss", "SELL signal"], key="pf_flt")
+    keyf = {"Returns %": lambda r: -r["pnl_pct"], "Returns ₹": lambda r: -r["pnl"], "Today %": lambda r: -(r["day_pct"] if r["day_pct"] == r["day_pct"] else -999),
+            "Current value": lambda r: -r["current"], "A–Z": lambda r: r["symbol"]}[sort]
+    ok = {"All": lambda r: True, "1 Month": lambda r: r["horizon"] == "1M", "6 Months": lambda r: r["horizon"] == "6M", "1 Year": lambda r: r["horizon"] == "1Y",
+          "In profit": lambda r: r["pnl"] > 0, "In loss": lambda r: r["pnl"] < 0, "SELL signal": lambda r: r["signal"] == "SELL"}[flt]
+    shown = sorted([r for r in rows if ok(r)], key=keyf)
+    if not shown: st.caption("No holdings match this filter."); return
+    cols = st.columns(2)
+    for i, h in enumerate(shown):
+        s = h["symbol"]
+        with cols[i % 2], st.container(border=True, key=f"card_hold_{i}"):
+            st.markdown(U.holding_html(h), unsafe_allow_html=True)
+            b1, b2, b3 = st.columns(3)
+            if b1.button("Buy more", key=f"buy_hold_{s}", type="primary", use_container_width=True): buy_dialog(s, h["name"], h["ltp"], h["day_pct"], h["stop"], h["target"], 1, h["horizon"] or "1M")
+            if b2.button("Sell", key=f"sell_hold_{s}", use_container_width=True): sell_dialog(s, h["name"], h["ltp"], h["day_pct"])
+            if b3.toggle("Details", key=f"det_{s}"):
+                sn = close_all[s].dropna() if s in close_all.columns else pd.Series(dtype=float)
+                sn = sn[sn.index >= pd.Timestamp(h["since"]).normalize() - pd.Timedelta(days=7)]
+                if len(sn) > 1:
+                    st.line_chart(pd.DataFrame({"Value of your shares": sn * h["qty"], "Amount invested": h["invested"]}), color=[U.UP, U.GREY], height=170)
+                    st.caption("Value of the shares you hold now, over time, against what you paid.")
+                if h.get("name") or FA.get(s): st.caption(fin_lines(FA.get(s) or {}) or "No results data available.")
+                for line in news(s)[:3]: st.caption("• " + line)
 
-    st.markdown("#### Holdings")
-    if len(H):
-        st.dataframe(H, hide_index=True, use_container_width=True, column_config={
-            **{k: st.column_config.NumberColumn(format="₹%.2f") for k in ["Avg price", "LTP", "Invested", "Current", "P&L ₹", "Stop", "Target"]},
-            "P&L %": st.column_config.NumberColumn(format="%.2f%%")})
-        pick = st.selectbox("Track growth of", list(pos))
-        since = pd.Timestamp(pos[pick]["since"]).normalize()
-        if pick in close_all.columns:
-            s_ = close_all[pick].dropna(); s_ = s_[s_.index >= since - pd.Timedelta(days=5)]
-            if len(s_) > 1: st.line_chart(s_ / pos[pick]["cost"] * pos[pick]["qty"])
-        st.caption("Chart shows the current worth of that holding over time (₹).")
-        for s in pos:
-            if st.button(f"Sell all {s}", key=f"sell_{s}"):
-                trade(s, "SELL", pos[s]["qty"], px(s)); st.rerun()
-    else:
-        st.info("No holdings yet. Use a 🧪 Demo buy button on an idea or place an order above.")
+def orders_view():
+    pend = acct.get("orders", [])
+    st.markdown("#### Open orders")
+    if not pend: st.caption("No pending limit orders. Choose **Limit** in the Buy or Sell window to wait for your price.")
+    for o in list(pend):
+        with st.container(border=True, key=f"card_ord_{o['id']}"):
+            now_p = px(o["symbol"])
+            st.markdown(f'<div class="gw-top"><div><div class="gw-sym">{U.esc(o["symbol"])}</div><div class="gw-sub">Placed {U.esc(o["ts"])} · {o["qty"]} shares · {U.esc(o.get("product", "DELIVERY").title())}</div></div>'
+                        f'<div class="gw-right"><div class="gw-px">{U.esc(U.inr(o["limit"]))}</div><div class="gw-sub">limit · now {U.esc(U.inr(now_p))}</div></div></div>'
+                        f'<div class="gw-chips">{U.side_chip(o["side"])}{U.chip("Waiting", "hold")}{U.hz_chip(o.get("horizon"))}</div>', unsafe_allow_html=True)
+            if st.button("Cancel order", key=f"cancel_{o['id']}"): pend.remove(o); save(); st.rerun()
+    st.markdown("#### Order history")
+    if not acct["trades"]: st.caption("Nothing traded yet."); return
+    t = pd.DataFrame(acct["trades"]).iloc[::-1]
+    for c in ("product", "horizon"):
+        if c not in t: t[c] = None
+    show = pd.DataFrame({"Time": t.ts.str.replace("T", " "), "Stock": t.symbol, "Side": t.side, "Qty": t.qty, "Price": t.price, "Value": t.qty * t.price,
+                         "Product": t["product"].fillna("DELIVERY").str.title(), "Horizon": t.horizon.fillna("")})
+    st.dataframe(style_df(show, side="Side", fmt={"Price": "₹{:,.2f}", "Value": "₹{:,.2f}"}), hide_index=True, use_container_width=True)
 
+def pnl_view():
+    closed = E.ledger(acct["trades"])
+    st.markdown(U.order_box_html([
+        ("Realised P&L (booked)", U.pnl_html(perf["realised"], perf["realised_pct"] if closed else None)),
+        ("Unrealised P&L (open)", U.pnl_html(perf["unrealised"], perf["unrealised_pct"] if rows else None)),
+        ("Total P&L", U.pnl_html(perf["total"], perf["total_pct"])),
+        ("Net worth", U.esc(U.inr(perf["net"]))), ("Started with", U.esc(U.inr(acct["start_cash"]))),
+        ("Winning trades", f"{perf['wins']} of {perf['closed']} ({perf['win_rate']:.0f}%)" if perf["closed"] else "–")]), unsafe_allow_html=True)
+    st.caption("Realised % is on the cost of the shares you sold. Unrealised % is on what you still hold. Total % is on your starting cash. "
+               "Method: average buy price, charges ignored. Total P&L always equals Net worth minus Started with.")
+    if not closed: st.info("No closed trades yet. Realised P&L appears here when you sell."); return
+    if perf["best"] and perf["worst"]:
+        b, w = perf["best"], perf["worst"]
+        st.markdown(f'<div class="gw-sub">Best trade: <b>{U.esc(b["symbol"])}</b> {U.pnl_html(b["pnl"], b["pct"])} · Worst trade: <b>{U.esc(w["symbol"])}</b> {U.pnl_html(w["pnl"], w["pct"])}</div>', unsafe_allow_html=True)
+    cl = pd.DataFrame(closed)
+    by = cl.groupby("symbol").agg(Trades=("pnl", "size"), Sold=("qty", "sum"), PnL=("pnl", "sum"), cost=("buy", lambda s: (s * cl.loc[s.index, "qty"]).sum())).reset_index()
+    by["PnL %"] = by.PnL / by.cost * 100
+    st.markdown("##### By stock")
+    st.dataframe(style_df(by.rename(columns={"symbol": "Stock", "PnL": "P&L ₹"})[["Stock", "Trades", "Sold", "P&L ₹", "PnL %"]].sort_values("P&L ₹", ascending=False),
+                          pnl=("P&L ₹", "PnL %"), fmt={"P&L ₹": "₹{:,.2f}", "PnL %": "{:+.2f}%"}), hide_index=True, use_container_width=True)
+    st.markdown("##### Every closed trade")
+    tr = pd.DataFrame({"Sold on": cl.ts.str.replace("T", " "), "Stock": cl.symbol, "Qty": cl.qty, "Buy price": cl.buy, "Sell price": cl.sell, "P&L ₹": cl.pnl, "P&L %": cl.pct}).iloc[::-1]
+    st.dataframe(style_df(tr, pnl=("P&L ₹", "P&L %"), fmt={"Buy price": "₹{:,.2f}", "Sell price": "₹{:,.2f}", "P&L ₹": "₹{:,.2f}", "P&L %": "{:+.2f}%"}), hide_index=True, use_container_width=True)
+
+def growth_view():
+    if not acct["trades"]: st.info("Growth appears after your first trade."); return
     hist = E.history(acct["trades"], close_all, acct["start_cash"])
+    if len(hist) and now_ist().weekday() < 5: hist.loc[pd.Timestamp(now_ist().date())] = perf["net"]       # today's live point
+    rng = st.radio("Range", ["1W", "1M", "3M", "6M", "All"], horizontal=True, index=4, key="gr_rng")
+    days = {"1W": 7, "1M": 31, "3M": 92, "6M": 183}.get(rng)
+    if days and len(hist): hist = hist[hist.index >= hist.index[-1] - pd.Timedelta(days=days)]
     if len(hist) > 1:
-        st.markdown("#### Portfolio growth"); st.line_chart(hist)
-    elif acct["trades"]:
-        st.caption("Portfolio growth chart appears after the first full trading day.")
+        ch = hist.iloc[-1] - hist.iloc[0]
+        st.markdown(f'<div class="gw-card"><div class="gw-k">Net worth · {U.esc(rng)}</div><div class="gw-big">{U.esc(U.inr(hist.iloc[-1], 0))}</div>'
+                    f'{U.pnl_html(ch, ch / hist.iloc[0] * 100)}</div>', unsafe_allow_html=True)
+        st.line_chart(hist.rename("Net worth"), color=U.UP if ch >= 0 else U.DOWN)
+        st.caption("Cash plus holdings at each day's closing price; today's point is live.")
+    else: st.caption("The daily chart appears after the first full trading day.")
+    ls = st.session_state.get(f"live_series_{user}", [])
+    if len(ls) > 1:
+        st.markdown("##### Live this session")
+        ser = pd.Series([v for _, v in ls], index=pd.to_datetime([t for t, _ in ls], unit="s", utc=True).tz_convert(IST).tz_localize(None))
+        st.line_chart(ser.rename("Net worth"), color=U.UP if ser.iloc[-1] >= ser.iloc[0] else U.DOWN, height=180)
+        d = ser.iloc[-1] - ser.iloc[0]
+        st.caption(f"Since you opened the app: {U.inr(d, 2, True)} ({U.pct(d / ser.iloc[0] * 100)}). One point per refresh.")
 
-    with st.expander("Order history & account"):
-        if acct["trades"]:
-            st.dataframe(pd.DataFrame(acct["trades"]).iloc[::-1], hide_index=True, use_container_width=True)
-        st.download_button("⬇️ Export account (backup)", json.dumps(acct), f"{user}_demo_account.json")
-        up = st.file_uploader("Import a backup", type="json")
-        if up and st.button("Restore backup"):
-            acct.clear(); acct.update(json.load(up)); save(); st.rerun()
-        new_cash = st.number_input("Reset with starting cash (₹)", 10000, 100000000, int(acct["start_cash"]), step=50000)
-        if st.button("⚠️ Reset account"):
-            acct.clear(); acct.update(start_cash=float(new_cash), trades=[]); save(); st.rerun()
-        st.caption("Demo only: virtual money, no brokerage, taxes or slippage, instant fills at the last available price. "
-                   "On free cloud hosting, saved accounts may reset when the app restarts, so export a backup.")
+def rec_cards(items, key, banner=None):
+    """Cards for a parsed Gemini portfolio review: one per stock, with buttons to act."""
+    if banner: st.caption(banner)
+    held_ = get_pos()[0]
+    for i, a in enumerate(items):
+        s = alias.get(a["symbol"]) or a["symbol"]; price = price_of(s); dp = day_pct(s, price) if s in close_all.columns else float("nan")
+        tone_ = {"HOLD": "hold", "BUY MORE": "buy", "BUY NEW": "buy", "SELL PART": "sell", "SELL ALL": "sell"}[a["action"]]
+        with st.container(border=True, key=f"card_{key}_{i}"):
+            st.markdown(f'<div class="gw-top"><div><div class="gw-sym">{U.esc(s)}</div><div class="gw-sub">{U.esc(a["confidence"] and a["confidence"] + " confidence")}</div></div>'
+                        f'<div class="gw-right"><div class="gw-px">{U.esc(U.inr(price))}</div></div></div>'
+                        f'<div class="gw-chips">{U.chip(a["action"], tone_)}{U.hz_chip(a["horizon"])}'
+                        f'{U.chip("You hold " + str(held_[s]["qty"]), "muted") if s in held_ else ""}</div>', unsafe_allow_html=True)
+            if a["reason"]: st.write(a["reason"])
+            if a["risk"]: st.caption("⚠️ Risk: " + a["risk"])
+            if a["stop"] or a["target"]: st.caption(f"New stop-loss {U.inr(a['stop'])} · new target {U.inr(a['target'])}")
+            b = st.columns(3); nm = (FA.get(s) or {}).get("name")
+            if price != price: st.info("No price found for this symbol, so it can't be traded here."); continue
+            if a["action"] in ("SELL PART", "SELL ALL") and s in held_ and b[0].button(f"Sell {a['qty'] if a['action'] == 'SELL PART' and a['qty'] else 'all'}", key=f"sell_{key}_{i}", use_container_width=True):
+                sell_dialog(s, nm, price, dp, a["qty"] if a["action"] == "SELL PART" else None)
+            if a["action"] in ("BUY MORE", "BUY NEW") and b[0].button(f"Buy {a['qty'] or ''}".strip(), key=f"buy_{key}_{i}", type="primary", use_container_width=True):
+                buy_dialog(s, nm, price, dp, a["stop"] if a["stop"] and a["stop"] < price else None, a["target"] if a["target"] and a["target"] > price else None,
+                           a["qty"] or 1, a["horizon"] or "1M")
+            if s in held_ and ((a["stop"] and a["stop"] < price) or (a["target"] and a["target"] > price)) and b[1].button("Apply stop/target", key=f"lv_{key}_{i}", use_container_width=True):
+                lv = acct.setdefault("levels", {}).setdefault(s, {})
+                if a["stop"] and a["stop"] < price: lv["stop"] = a["stop"]
+                if a["target"] and a["target"] > price: lv["target"] = a["target"]
+                save(); flash(f"Updated stop-loss / target for {s}"); st.rerun()
 
-with t5:
-    ta, tb = st.tabs(["📋 Copy & paste (no key)", "⚡ Direct (API key)"])
+def review_view():
+    st.markdown("#### 1 · Instant check (no AI)")
+    if not rows: st.caption("Buy something first. Your holdings will be checked here.")
+    for r in sorted(rows, key=lambda r: ["SELL", "HOLD", "BUY"].index(r["signal"])):
+        st.markdown(f'<div class="gw-card" style="border:1px solid #8a8fa340;padding:10px 14px;margin-bottom:6px"><div class="gw-top"><div><span class="gw-sym" style="font-size:1rem">{U.esc(r["symbol"])}</span> '
+                    f'{U.action_chip(r["signal"])}{U.hz_chip(r["horizon"])}<div class="gw-sub">{U.esc(r["reason"])}</div></div>'
+                    f'<div class="gw-right">{U.pnl_html(r["pnl"], r["pnl_pct"])}<div class="gw-sub">{r["weight"]:.0f}% of holdings</div></div></div></div>', unsafe_allow_html=True)
+    big = [r for r in rows if r["weight"] > 35 and len(rows) > 1]
+    if big: st.warning("Concentration: " + ", ".join(f"{r['symbol']} is {r['weight']:.0f}%" for r in big) + " of your holdings. Consider spreading the risk.")
+    st.caption("Rules of thumb from trend, stop-loss and target. Open the Holdings tab to buy or sell.")
+    st.divider(); st.markdown("#### 2 · Review with Gemini (copy & paste, no key)")
+    notes = acct.get("notes", "")
+    prompt = E.build_review_prompt(rows, perf, dt.date.today(), notes, build_context())
+    copy_open_gemini(prompt)
+    with st.expander("Show prompt text"): st.code(prompt, language=None)
+    reply = st.text_area("Paste Gemini's reply here", height=140, key="rv_paste", placeholder="Paste the JSON reply from Gemini…")
+    if st.button("✅ Show actions", type="primary", use_container_width=True, key="rv_show"):
+        items = E.parse_review(reply)
+        if items: acct["review"] = dict(ts=now_ist().strftime("%d %b %Y %H:%M"), items=items); save(); st.rerun()
+        elif items is None:
+            st.error("Couldn't find the JSON list in that reply. Ask Gemini: 'Reply again with only the JSON array', then paste it.")
+            if reply.strip(): st.markdown("**Gemini's raw reply:**"); st.write(reply)
+        else: st.warning("The reply had no usable actions.")
+    rv = acct.get("review")
+    if rv:
+        rec_cards(rv["items"], "rv", f"Gemini review pasted {rv['ts']} · AI opinion, can be wrong, not SEBI-registered advice")
+        if st.button("Clear review", key="rv_clear"): acct.pop("review", None); save(); st.rerun()
+    st.divider(); st.markdown("#### 3 · Review with Gemini (API key)")
+    if st.button("⚡ Review my portfolio now", use_container_width=True, key="rv_api"):
+        if not gkey: st.error("Add your Gemini API key in the sidebar first (free at aistudio.google.com).")
+        else:
+            with st.spinner("Gemini is reviewing your portfolio…"):
+                try:
+                    ans = G.ask(gkey, gmodel.strip(), [dict(role="user", text=prompt)], "", gsearch, system=E.SYSTEM_RULES)
+                    items = E.parse_review(ans)
+                    if items: acct["review"] = dict(ts=now_ist().strftime("%d %b %Y %H:%M"), items=items); save(); st.rerun()
+                    else: st.session_state["rv_text"] = ans
+                except Exception as e: st.error(str(e))
+    if st.session_state.get("rv_text"): st.markdown(st.session_state["rv_text"])
+
+def account_view():
+    st.download_button("⬇️ Export account (backup)", json.dumps(acct), f"{user}_demo_account.json", use_container_width=True)
+    up = st.file_uploader("Import a backup", type="json")
+    if up and st.button("Restore backup"): acct.clear(); acct.update(json.load(up)); save(); st.rerun()
+    new_cash = st.number_input("Reset with starting cash (₹)", 10000, 100000000, int(acct["start_cash"]), step=50000)
+    if st.button("⚠️ Reset account"):
+        keep = {k: acct[k] for k in ("theme", "blur", "fs", "hc", "anim") if k in acct}
+        acct.clear(); acct.update(start_cash=float(new_cash), trades=[], **keep); save(); st.rerun()
+    st.caption("Demo only: virtual money, no brokerage, taxes or slippage. Market orders fill at the latest available price (can be a few minutes delayed). "
+               "Limit orders and stop-loss / target sells are checked whenever the app is open. Intraday positions are squared off at 3:20 PM. "
+               "On free cloud hosting, saved accounts may reset when the app restarts, so export a backup.")
+
+with t_pf:
+    h1, h2 = st.columns([5, 1.4], vertical_alignment="center")
+    with h1: components.html(U.countdown_html(every if auto_on else 0, NONCE, False), height=36)
+    h2.button("🔄 Refresh", key="pf_refresh", on_click=refresh_now, use_container_width=True)
+    p_h, p_o, p_p, p_g, p_r, p_a = st.tabs(["Holdings", "Orders", "P&L report", "Growth", "AI review", "Account"])
+    with p_h: holdings_view()
+    with p_o: orders_view()
+    with p_p: pnl_view()
+    with p_g: growth_view()
+    with p_r: review_view()
+    with p_a: account_view()
+
+# ======================================================================
+# Gemini AI (ideas)
+# ======================================================================
+with t_ai:
+    ta, tb = st.tabs(["📋 Ideas: copy & paste (no key)", "⚡ Chat (API key)"])
     with ta:
         st.write("**1.** Build a prompt  **2.** Copy it and open Gemini  **3.** Paste Gemini's reply below to get recommendations here.")
-        st.caption("The prompt tells Gemini to use broker and institutional views, global news and technology shifts, government policy, "
-                   "and company results, and lets it pick **any** NSE/BSE company.")
-        kind = st.radio("What do you want to ask?", E.PROMPT_KINDS)
+        st.caption("The prompt tells Gemini to use broker and institutional views, global news and technology shifts, government policy, and company results, and lets it pick **any** NSE/BSE company. "
+                   "To review your own holdings use **Portfolio > AI review**.")
+        kind = st.radio("What do you want to ask?", E.IDEA_KINDS)
         own = st.text_input("Your question") if kind == E.PROMPT_KINDS[3] else ""
         notes = st.text_area("Optional: your own notes on news, policy or events to include", acct.get("notes", ""), height=90,
                              placeholder="e.g. Budget raised railway capex; new PLI for electronics; crude fell 8% this week")
         if notes != acct.get("notes", ""): acct["notes"] = notes; save()
         prompt = E.build_prompt(kind, own, build_context(), dt.date.today())
-        tj = json.dumps(prompt).replace("</", "<\\/")
-        components.html(f"""<div style="display:flex;gap:8px">
-<button id="c" style="flex:1;padding:12px;border:0;border-radius:10px;background:#0e9f5a;color:#fff;font:600 15px system-ui">📋 Copy prompt</button>
-<button id="o" style="flex:1;padding:12px;border:0;border-radius:10px;background:#1d6fd8;color:#fff;font:600 15px system-ui">🚀 Copy + open Gemini</button></div>
-<div id="m" style="font:14px system-ui;margin-top:8px;color:#222"></div>
-<script>const t={tj};const $=i=>document.getElementById(i);
-async function cp(){{if(window.Android&&Android.copy){{try{{Android.copy(t);return true}}catch(e){{}}}}
-try{{await navigator.clipboard.writeText(t);return true}}catch(e){{}}
-try{{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand('copy');a.remove();return ok}}catch(e){{return false}}}}
-$('c').onclick=async()=>{{$('m').textContent=(await cp())?'✅ Copied. Now open Gemini and paste.':'⚠️ Copy failed: open Show prompt text below and long-press to copy.'}};
-$('o').onclick=async()=>{{const ok=await cp();$('m').textContent=ok?'✅ Prompt copied. Opening Gemini, paste it there.':'Opening Gemini… (copy the prompt from Show prompt text below)';
-if(window.Android&&Android.openGemini){{Android.openGemini()}}
-else if(/Android/i.test(navigator.userAgent)){{window.open('intent://gemini.google.com/app#Intent;scheme=https;package=com.google.android.apps.bard;S.browser_fallback_url=https%3A%2F%2Fgemini.google.com%2Fapp;end','_top')}}
-else{{window.open('https://gemini.google.com/app','_blank')}}}};</script>""", height=110)
-        st.link_button("🌐 Open Gemini in browser instead", "https://gemini.google.com/app", use_container_width=True)
+        copy_open_gemini(prompt)
         with st.expander("Show prompt text"): st.code(prompt, language=None)
         st.divider()
         reply = st.text_area("Paste Gemini's reply here", height=160, key="greply", placeholder="Paste the JSON reply from Gemini…")
         if st.button("✅ Show recommendations", type="primary", use_container_width=True):
             items = E.parse_recs(reply)
             if items:
-                acct["recs"] = dict(ts=dt.datetime.now().strftime("%d %b %Y %H:%M"), items=items); save(); st.rerun()
+                acct["recs"] = dict(ts=now_ist().strftime("%d %b %Y %H:%M"), items=items); save(); st.rerun()
             elif items is None:
                 st.error("Couldn't find the JSON list in that reply. Ask Gemini: 'Reply again with only the JSON array', then paste it.")
                 if reply.strip(): st.markdown("**Gemini's raw reply:**"); st.write(reply)
@@ -496,42 +849,47 @@ else{{window.open('https://gemini.google.com/app','_blank')}}}};</script>""", he
         if recs:
             st.subheader("Gemini's recommendations")
             st.caption(f"Pasted {recs['ts']} · AI opinion, can be wrong, not SEBI-registered advice")
+            cols = st.columns(2)
             for i, r in enumerate(recs["items"]):
                 sym = r["symbol"]; al = acct.setdefault("alias", {}); use = al.get(sym) or sym
                 if use not in close_all.columns and sym not in al:
                     hits = search_stocks(r.get("company") or sym); al[sym] = hits[0]["symbol"] if hits else ""; save()
                     if al[sym]: st.rerun()
-                last = px(use)
-                with st.container(border=True, key=f"card_rec_{i}"):
-                    st.markdown(f"### {use} · {r['action'] or 'n/a'}")
-                    if r.get("company"): st.caption(r["company"])
-                    f_ = lambda v: "n/a" if v is None else f"₹{v:,.2f}"
-                    st.write(f"Entry {f_(r['entry'])} · Stop-loss {f_(r['stop'])} · Target {f_(r['target'])}")
-                    st.caption(f"{r['horizon']} · confidence {r['confidence'] or 'n/a'}" + (f" · liquidity {r['liquidity']}" if r.get("liquidity") else ""))
+                last = px(use); dp = day_pct(use, last)
+                act = str(r["action"]).lower(); sig = "SELL" if "avoid" in act or "sell" in act else "HOLD" if "wait" in act or "hold" in act else "BUY"
+                with cols[i % 2], st.container(border=True, key=f"card_rec_{i}"):
+                    tags = U.hz_chip(E.horizon_of(r["horizon"])) + U.action_chip(sig) + U.chips([(f"{r['confidence']} confidence", "info")] if r["confidence"] else [])
+                    tags += U.chips([(f"{r['liquidity']} liquidity", "muted")] if r.get("liquidity") else [])
+                    st.markdown(U.stock_head_html(use, r.get("company"), last, dp, tags), unsafe_allow_html=True)
+                    if last == last:
+                        st.markdown(U.levels_html(last, r["entry"], r["stop"], r["target"]), unsafe_allow_html=True)
+                    else: st.caption(f"Entry {U.inr(r['entry'])} · Stop-loss {U.inr(r['stop'])} · Target {U.inr(r['target'])}")
                     if r["reason"]: st.write(r["reason"])
                     for lab, k in (("🏦 Brokers/institutions", "broker_view"), ("🌍 News & policy", "news_policy"), ("📊 Financials", "financials")):
                         if r.get(k): st.caption(f"{lab}: {r[k]}")
                     if r["risk"]: st.caption(f"⚠️ Risk: {r['risk']}")
                     if last == last:
-                        st.caption(f"Live price now ≈ ₹{last:,.2f}")
                         if r["entry"] and abs(r["entry"] / last - 1) > 0.10:
                             st.warning(f"Gemini's entry differs from the live price by {abs(r['entry']/last-1)*100:.0f}%. It may have used old prices.")
                         if r["stop"] and r["stop"] >= last: st.warning("Its stop-loss is above the live price, so it is not usable as given.")
                         if r["target"] and r["target"] <= last: st.warning("Its target is below the live price.")
                         stop_ok = r["stop"] if r["stop"] and r["stop"] < last else None
-                        qn = E.qty_for(last, stop_ok, capital, risk)
-                        if qn >= 1 and st.button(f"🧪 Demo buy {qn} @ ₹{last:,.2f}", key=f"gr_{i}_{use}"):
-                            err = trade(use, "BUY", qn, last, stop_ok, r["target"] if r["target"] and r["target"] > last else None)
-                            st.error(err) if err else (st.success("Demo order placed. See the Demo portfolio tab."), st.rerun())
+                        tgt_ok = r["target"] if r["target"] and r["target"] > last else None
+                        qn = max(E.qty_for(last, stop_ok, capital, risk), 1)
+                        c1, c2 = st.columns(2)
+                        if c1.button("Buy", key=f"gr_{i}_{use}", type="primary", use_container_width=True):
+                            buy_dialog(use, r.get("company"), last, dp, stop_ok, tgt_ok, qn, E.horizon_of(r["horizon"]) or "1M")
+                        watch_button(c2, use, f"rec_{i}")
                     else:
-                        st.info("No price found for this symbol on NSE/BSE. Check it in the 'Find any stock' tab (try the company name or BSE code).")
+                        st.info("No price found for this symbol on NSE/BSE. Check it in Explore > Search & watchlist (try the company name or BSE code).")
             if st.button("Clear recommendations"): acct.pop("recs", None); save(); st.rerun()
     with tb:
         st.write("Ask Gemini directly inside the app. It also receives this app's rankings, analyst data and your demo holdings as context, and may suggest any company.")
         chat = st.session_state.setdefault("gchat", [])
         qs = {"Best 1‑month ideas?": "Which stocks (any NSE/BSE company) look best for the next month? Use broker/institutional views, global news, government policy and latest results. Give entry, stop-loss, target and risks.",
+              "Best 6‑month ideas?": "Which stocks (any NSE/BSE company) look best for the next 6 months? Use broker/institutional views, global news, government policy and latest results. Give entry, stop-loss, target and risks.",
               "Best 1‑year ideas?": "Which stocks (any NSE/BSE company) look best for the next 12 months? Use broker/institutional views, global news and technology shifts, government policy and latest results.",
-              "Review my demo portfolio": "Review my demo holdings. What are the concentration and risk issues, and what would you change?"}
+              "Review my portfolio": "Review my demo holdings. What are the concentration and risk issues, and what would you change?"}
         cols_ = st.columns(len(qs)); quick = None
         for c_, (lab, txt) in zip(cols_, qs.items()):
             if c_.button(lab, use_container_width=True): quick = txt
@@ -552,13 +910,34 @@ else{{window.open('https://gemini.google.com/app','_blank')}}}};</script>""", he
         st.caption("Gemini's answers are AI-generated opinions, can be wrong, and are not SEBI-registered advice. "
                    "Your question, the rankings and your demo holdings are sent to Google when you ask. Your API key may be billed by Google if you exceed the free tier.")
 
-with t4:
-    st.write("How the 1‑month strategy (top 5 by momentum, rebalanced every ~21 trading days) would have done on this stock list over the past ~2 years:")
-    bt = E.backtest(close)
-    if len(bt):
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Avg monthly return", f"{bt.strategy.mean()*100:.1f}%")
-        c2.metric("Months with ≥10% gain", f"{(bt.strategy>=.10).mean()*100:.0f}%")
-        c3.metric("Months with a loss", f"{(bt.strategy<0).mean()*100:.0f}%")
-        st.line_chart(((1 + bt.set_index("date")[["strategy", "universe"]]).cumprod() - 1) * 100)
-        st.caption("Uses today's stock list (survivorship bias), ignores brokerage, taxes and slippage. Real results will be lower.")
+# ======================================================================
+# Tools
+# ======================================================================
+with t_tools:
+    k1, k2, k3 = st.tabs(["🌍 Market & global context", "📊 Backtest", "ℹ️ How it works"])
+    with k1:
+        if snap:
+            cols = st.columns(3)
+            for i, (k, (v, d)) in enumerate(snap.items()):
+                cols[i % 3].markdown(f'<div class="gw-card" style="border:1px solid #8a8fa340"><div class="gw-k">{U.esc(k)}</div><div class="gw-px">{U.esc(f"{v:,.2f}")}</div>{U.pct_html(d, 1)}</div>', unsafe_allow_html=True)
+        else: st.info("Market data is not available right now. Try again in a minute.")
+        st.caption(f"Data as of {close.index[-1]:%d %b %Y} · {len(m)} stocks scanned in the idea lists" + (f" · {len(base) - len(close.columns)} symbols had no data (renamed/delisted?)" if len(base) > len(close.columns) else ""))
+    with k2:
+        st.write("How the 1‑month strategy (top 5 by momentum, rebalanced every ~21 trading days) would have done on this stock list over the past ~2 years:")
+        bt = E.backtest(close)
+        if len(bt):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Avg monthly return", f"{bt.strategy.mean()*100:.1f}%")
+            c2.metric("Months with ≥10% gain", f"{(bt.strategy>=.10).mean()*100:.0f}%")
+            c3.metric("Months with a loss", f"{(bt.strategy<0).mean()*100:.0f}%")
+            st.line_chart(((1 + bt.set_index("date")[["strategy", "universe"]]).cumprod() - 1) * 100)
+            st.caption("Uses today's stock list (survivorship bias), ignores brokerage, taxes and slippage. Real results will be lower.")
+    with k3:
+        st.markdown("""
+- **Explore** has 1 Month, 6 Months and 1 Year idea lists, a scan of every NSE-listed company, and a search for any company.
+- Tags: **1M / 6M / 1Y** is the horizon. **BUY / HOLD / SELL** comes from the stop-loss, target, trend and momentum. Other tags show risk, momentum and analyst views.
+- **Buy** opens an order window: Delivery or Intraday, Market or Limit, quantity, horizon, optional stop-loss and target.
+- **Portfolio** shows cards with your buy price next to the current price, returns in ₹ and %, and today's move. Prices refresh by themselves; the countdown at the top shows the time left.
+- **P&L report** lists every closed trade. Realised + unrealised always equals net worth minus starting cash.
+- **AI review** gives an instant rule-based check and a separate Gemini prompt for your holdings.
+- Everything is practice money. Nobody can guarantee returns. Not SEBI-registered investment advice.""")

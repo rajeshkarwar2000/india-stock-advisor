@@ -123,3 +123,71 @@ def test_market_scan_pipeline():
     assert b["fund"].notna().sum() == 1
     import datetime as dt
     assert "highest realistic return potential" in E.build_prompt(E.PROMPT_KINDS[0], "", "", dt.date(2026, 11, 19))
+
+
+# ---------- v2: P&L, tags, review, UI helpers ----------
+import ui as U
+
+def _tr(d, s, side, q, p, **k):
+    return dict(ts=f"2026-11-{d:02d}T10:00:00", symbol=s, side=side, qty=q, price=p, **k)
+
+def test_realised_plus_unrealised_equals_networth_change():
+    tr = [_tr(2, "A", "BUY", 10, 100.0, stop=90, target=130), _tr(3, "A", "SELL", 10, 95.0), _tr(4, "A", "BUY", 5, 120.0),
+          _tr(5, "B", "BUY", 7, 33.33), _tr(6, "B", "SELL", 3, 40.0), _tr(9, "B", "SELL", 4, 31.0)]
+    perf = E.performance(tr, 1_000_000, {"A": 125.0})
+    assert abs(perf["total"] - (perf["net"] - 1_000_000)) < 1e-6
+    assert abs(sum(c["pnl"] for c in E.ledger(tr)) - E.positions(tr)[1]) < 1e-9
+    assert perf["closed"] == 3 and perf["wins"] == 1 and perf["losses"] == 2
+
+def test_old_stop_does_not_leak_into_new_position():
+    tr = [_tr(2, "A", "BUY", 10, 100.0, stop=90, target=130), _tr(3, "A", "SELL", 10, 95.0), _tr(4, "A", "BUY", 5, 120.0)]
+    p = E.positions(tr)[0]["A"]
+    assert p["stop"] is None and p["target"] is None and p["cost"] == 600.0
+
+def test_history_starts_at_cash_and_follows_prices():
+    ix = pd.bdate_range("2026-11-02", "2026-11-13")
+    close = pd.DataFrame({"A": np.linspace(100, 130, len(ix))}, index=ix)
+    h = E.history([_tr(2, "A", "BUY", 10, 100.0)], close, 1_000_000)
+    assert h.iloc[0] == 1_000_000 and abs(h.iloc[-1] - (1_000_000 + 10 * 30)) < 1e-6
+
+def test_mid_horizon_and_plans():
+    m = E.score(E.metrics(prices())); assert m["mid"].notna().all()
+    for kind in ("short", "mid", "long"):
+        for _, r in m.iterrows():
+            p = E.plan(r, 100000, 1, kind); assert p["stop"] < p["entry"] < p["target"], (kind, p)
+    b = E.blend(m, {})
+    assert b["mid2"].notna().all()
+
+def test_signal_tags_horizon():
+    r = E.score(E.metrics(prices())).iloc[0]
+    assert E.signal(r, stop=r.price * 1.5)[0] == "SELL" and E.signal(r, target=r.price * 0.9)[0] == "SELL"
+    assert E.signal(r)[0] in ("BUY", "HOLD", "SELL")
+    assert all(k in ("buy", "sell", "hold", "info", "risk", "muted") for _, k in E.tags_for(r, {"rec": "buy"}, scan=True))
+    assert [E.horizon_of(x) for x in ("1 month", "6 months", "1 year", "1M")] == ["1M", "6M", "1Y", "1M"]
+    assert E.market_open(__import__("datetime").datetime(2026, 11, 19, 10, 0)) and not E.market_open(__import__("datetime").datetime(2026, 11, 21, 10, 0))
+
+def test_review_prompt_and_parse():
+    import datetime as dt
+    rows = [dict(symbol="TCS", qty=3, avg=3000, ltp=3100, pnl=300, pnl_pct=3.3, weight=60, stop=2900, target=3500, horizon="6M", signal="HOLD")]
+    perf = dict(current=1e5, invested=9e4, cash=9e5, unrealised=1e4, unrealised_pct=11.1, realised=500, closed=2, win_rate=50)
+    p = E.build_review_prompt(rows, perf, dt.date(2026, 11, 19), "note", "ctx")
+    assert "TCS: 3 shares" in p and "JSON array" in p and "Sell part" in p
+    out = E.parse_review('ok [{"symbol":"NSE:TCS","action":"Sell part","qty":"2","new_stop_loss":2950,"horizon":"6 months"},{"symbol":"ITC","action":"Buy new","qty":10},{"symbol":"A","action":"Hold"}]')
+    assert [(o["symbol"], o["action"], o["qty"]) for o in out] == [("TCS", "SELL PART", 2), ("ITC", "BUY NEW", 10), ("A", "HOLD", 0)]
+    assert out[0]["stop"] == 2950 and out[0]["horizon"] == "6M" and E.parse_review("nothing") is None
+
+def test_scan_horizon_scores():
+    rng = np.random.default_rng(5); n = 300; ix = pd.bdate_range(end="2026-11-18", periods=n); cols = [f"S{i}" for i in range(40)]
+    close = pd.DataFrame({c: (50 + rng.integers(0, 500)) * np.exp(np.cumsum(rng.normal(0.0006, 0.02, n))) for c in cols}, index=ix)
+    vol = pd.DataFrame({c: rng.integers(200000, 5000000, n) for c in cols}, index=ix)
+    t = E.potential(E.metrics(close, min_len=60, volume=vol), "High growth")
+    assert t[["p1m", "p6m", "p1y"]].notna().any().all()
+
+def test_ui_helpers():
+    assert U.inr(1234567.5) == "₹12,34,567.50" and U.inr(-1234.5, sign=True) == "-₹1,234.50" and U.inr(0.004, sign=True) == "₹0.00"
+    assert U.pct(2.3456) == "+2.35%" and U.pct(float("nan")) == "–"
+    assert "gw-up" in U.pnl_html(10, 1) and "gw-down" in U.pnl_html(-10, -1) and "gw-flat" in U.pnl_html(None)
+    assert "<script>" not in U.chip("<script>", "buy")
+    assert "st-key-live_refresh" in U.countdown_html(30, "n") and "Auto-refresh is off" in U.countdown_html(0, "n")
+    assert U.GROWW_CSS.count("{") == U.GROWW_CSS.count("}")
+    assert "Groww Light" == E.DEFAULT_THEME
