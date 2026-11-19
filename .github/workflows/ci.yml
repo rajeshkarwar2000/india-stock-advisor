@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"   # keep-alive ping every 6 hours
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest ruff
+
+      - name: Block leaked API keys
+        run: |
+          ! grep -rEn 'AIza[0-9A-Za-z_-]{30,}|AQ\.[0-9A-Za-z_-]{30,}' --include='*.py' --include='*.toml' --include='*.yml' --include='*.md' .
+
+      - name: Compile check
+        run: python -m py_compile app.py engine.py gemini_client.py
+
+      - name: Lint (real errors only)
+        continue-on-error: true
+        run: ruff check --select E9,F .
+
+      - name: Run tests
+        run: pytest -q
+
+  ping:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Streamlit app
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          if [ -n "$APP_URL" ]; then
+            curl -sS -L -o /dev/null -w "HTTP %{http_code}\n" "$APP_URL"
+          else
+            echo "Add a repository variable named APP_URL to enable pinging."
+          fi
