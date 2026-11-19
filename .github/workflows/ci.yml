@@ -45,6 +45,51 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+      - name: Prepare downloadable app folder
+        run: mkdir -p dist && cp -r app.py engine.py gemini_client.py requirements.txt README.md .streamlit tests dist/ && printf 'pip install -r requirements.txt\nstreamlit run app.py\n' > dist/start.sh && printf '@echo off\r\npip install -r requirements.txt\r\nstreamlit run app.py\r\npause\r\n' > dist/start.bat
+
+      - name: Upload app as downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: india-stock-advisor-app
+          path: dist
+          retention-days: 30
+
+  apk:
+    needs: check
+    if: github.event_name != 'pull_request' && github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-java@v4
+        if: hashFiles('android/app/build.gradle') != ''
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: hashFiles('android/app/build.gradle') != ''
+        with:
+          gradle-version: "8.9"
+
+      - name: Build Android APK
+        if: hashFiles('android/app/build.gradle') != ''
+        working-directory: android
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: gradle assembleDebug --no-daemon -PAPP_URL="$APP_URL"
+
+      - name: Upload APK
+        if: hashFiles('android/app/build.gradle') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: india-stock-advisor-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
   ping:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
