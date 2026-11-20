@@ -1,6 +1,6 @@
 """Scoring, strategy and backtest logic (pandas/numpy only)."""
 import datetime as _dt
-FILES_VERSION = 7
+FILES_VERSION = 9
 import numpy as np, pandas as pd
 from math import erf, sqrt, log
 
@@ -482,7 +482,7 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 [data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3, [data-testid="stMarkdownContainer"] h4,
 [data-testid="stMarkdownContainer"] strong, [data-testid="stWidgetLabel"] p, [data-testid="stMetricLabel"] p, [data-testid="stMetricValue"],
 h1, h2, h3, label, .stRadio label p, .stCheckbox label p, .stButton button p, .stDownloadButton button p,
-[data-testid^="stBaseLinkButton"] p, .stTabs button p, [data-testid="stExpander"] summary p, [data-testid="stAlert"] p {{ color: {tx} !important; }}
+[data-testid^="stBaseLinkButton"] p, [data-testid="stExpander"] summary p, [data-testid="stAlert"] p {{ color: {tx} !important; }}
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ color: {mu} !important; }}
 input, textarea {{ color: {tx} !important; -webkit-text-fill-color: {tx} !important; }}
 ::placeholder {{ color: {mu} !important; opacity: 1 !important; -webkit-text-fill-color: {mu} !important; }}
@@ -492,11 +492,6 @@ input, textarea {{ color: {tx} !important; -webkit-text-fill-color: {tx} !import
 [data-testid="stAlert"] {{ {glass} border: 1px solid {bd}; border-radius: {radius}px; }}
 [data-testid="stMetric"] {{ padding: 10px 14px; }}
 [data-testid="stExpander"] details {{ border: 0 !important; }}
-.stTabs [data-baseweb="tab-list"] {{ background: {t['card']}; {glass} border: 1px solid {bd}; border-radius: 999px; padding: 4px; gap: 4px; }}
-.stTabs [data-baseweb="tab"] {{ border-radius: 999px; height: auto; padding: 8px 14px; }}
-.stTabs [aria-selected="true"] {{ background: {ac}; }}
-.stTabs [aria-selected="true"] p {{ color: {at} !important; }}
-.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display: none; }}
 .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button, [data-testid^="stBaseLinkButton"] {{
   border-radius: 999px !important; border: 1px solid {bd} !important; background: {t['card']}; {glass} box-shadow: {t['shadow']}; }}
 button[kind="primary"], [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"] {{ background: {ac} !important; border: 0 !important; }}

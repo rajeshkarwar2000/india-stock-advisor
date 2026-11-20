@@ -3,7 +3,7 @@
 Everything here returns plain strings (no Streamlit import) so it can be unit-tested.
 HTML is built on one line: Streamlit's markdown turns indented lines into code blocks.
 """
-FILES_VERSION = 7
+FILES_VERSION = 9
 import html as _h
 import json as _json
 
@@ -101,7 +101,7 @@ def live_bar_html(is_open, idx, stamp):
     """Market status + Nifty/Sensex ticker line."""
     st = chip("Market open", "buy") if is_open else chip("Market closed", "muted")
     bits = "".join(f'<span class="gw-idx"><b>{esc(k)}</b> {esc(f"{v:,.2f}")} {pct_html(d)}</span>' for k, (v, d) in (idx or {}).items())
-    return f'<div class="gw-live">{st}{bits}<span class="gw-sub">Updated {esc(stamp)}</span></div>'
+    return f'<div class="gw-live">{st}{bits}' + (f'<span class="gw-sub">Updated {esc(stamp)}</span>' if stamp else "") + '</div>'
 
 
 def summary_html(perf, day, day_pct, n_hold):
@@ -168,7 +168,7 @@ def countdown_html(seconds, nonce, fire=True, label="Next refresh in", target="l
                 'Auto-refresh is off. Use Refresh.</div><!--%s-->' % esc(nonce))
     return f"""<div style="font:600 13px system-ui,sans-serif;color:#6b7083;display:flex;align-items:center;gap:10px;padding:6px 0">
 <span id="d" style="width:9px;height:9px;border-radius:50%;background:{UP};flex:none"></span>
-<span id="t" style="min-width:150px">{esc(label)} {int(seconds)}s</span>
+<span id="t" style="white-space:nowrap">{esc(label)} {int(seconds)}s</span>
 <div style="flex:1;height:5px;background:#e3e5ea;border-radius:5px;overflow:hidden"><div id="b" style="height:5px;width:100%;background:{UP}"></div></div></div>
 <script>
 const total={int(seconds)}, fire={_json.dumps(bool(fire))}, end=Date.now()+total*1000, T=document.getElementById('t'), B=document.getElementById('b');
@@ -213,15 +213,26 @@ GROWW_CSS = f"""<style>
 .st-key-exec_buy button{{background:{UP}!important;border:0!important}}
 .st-key-exec_buy button p{{color:#fff!important}}
 /* main ribbon = the only tab list that is not inside a tab panel: iOS Liquid Glass capsule */
-[role="tablist"]{{position:sticky;top:3.6rem;z-index:99;background:rgba(255,255,255,.40)!important;backdrop-filter:blur(22px) saturate(190%)!important;-webkit-backdrop-filter:blur(22px) saturate(190%)!important;border:1px solid rgba(255,255,255,.80)!important;border-radius:999px!important;padding:4px!important;gap:2px!important;box-shadow:inset 0 1.5px 1px rgba(255,255,255,.95),inset 0 -1.5px 2px rgba(0,0,0,.06),0 10px 28px rgba(40,60,110,.20)!important}}
-[role="tablist"] button[role="tab"]{{flex:1 1 auto;justify-content:center;white-space:nowrap;border-radius:999px!important;padding:9px 8px!important;background:transparent!important;border:0!important;box-shadow:none!important}}
-[role="tablist"] button[role="tab"] p{{color:#5f6270!important;font-weight:600!important;font-size:.9rem!important;white-space:nowrap}}
-[role="tablist"] button[role="tab"][aria-selected="true"]{{background:rgba(120,124,140,.20)!important;box-shadow:inset 0 1.5px 2px rgba(255,255,255,.75),inset 0 -1px 3px rgba(0,0,0,.10),0 1px 4px rgba(0,0,0,.08)!important}}
-[role="tablist"] button[role="tab"][aria-selected="true"] p{{color:{UP}!important;font-weight:700!important}}
+[role="tablist"]{{position:sticky;top:2.6rem;z-index:99;background:rgba(255,255,255,.42)!important;backdrop-filter:blur(22px) saturate(190%)!important;-webkit-backdrop-filter:blur(22px) saturate(190%)!important;border:1px solid rgba(255,255,255,.85)!important;border-radius:999px!important;padding:4px!important;gap:2px!important;box-shadow:inset 0 1.5px 1px rgba(255,255,255,.95),inset 0 -1.5px 2px rgba(0,0,0,.06),0 8px 22px rgba(40,60,110,.16)!important}}
+[role="tablist"] button,[role="tablist"] [role="tab"]{{flex:1 1 auto;justify-content:center;white-space:nowrap;border-radius:999px!important;padding:8px 8px!important;background:transparent!important;border:1.5px solid transparent!important;box-shadow:none!important;height:auto!important}}
+[role="tablist"] button *,[role="tablist"] [role="tab"] *{{color:#5f6270!important;font-weight:600!important;font-size:.9rem!important;white-space:nowrap}}
+[role="tablist"] [aria-selected="true"]{{background:rgba(255,255,255,.28)!important;border:1.5px solid rgba(0,179,134,.45)!important;box-shadow:inset 0 1px 2px rgba(255,255,255,.8),0 1px 5px rgba(0,179,134,.18)!important}}
+[role="tablist"] [aria-selected="true"] *{{color:{UP}!important;font-weight:700!important}}
 [role="tablist"] > div:empty,[role="tablist"] [data-baseweb="tab-highlight"],[role="tablist"] [data-baseweb="tab-border"]{{display:none!important}}
-[role="tabpanel"] [role="tablist"]{{position:static!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:none!important;background:transparent!important;border:0!important;border-bottom:1px solid {GREY}40!important;border-radius:0!important;padding:0!important;gap:4px!important}}
-[role="tabpanel"] [role="tablist"] button[role="tab"]{{flex:none;border-radius:0!important;padding:8px 12px!important;background:transparent!important;box-shadow:none!important;border-bottom:2px solid transparent!important}}
-[role="tabpanel"] [role="tablist"] button[role="tab"] p{{color:inherit!important;font-weight:500!important}}
-[role="tabpanel"] [role="tablist"] button[role="tab"][aria-selected="true"]{{background:transparent!important;box-shadow:none!important;border-bottom:2px solid {UP}!important}}
-[role="tabpanel"] [role="tablist"] button[role="tab"][aria-selected="true"] p{{color:{UP}!important;font-weight:700!important}}
+[role="tabpanel"] [role="tablist"]{{position:static!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:none!important;background:transparent!important;border:0!important;border-radius:0!important;padding:2px 0!important;gap:4px!important}}
+[role="tabpanel"] [role="tablist"] button,[role="tabpanel"] [role="tablist"] [role="tab"]{{flex:none;border-radius:999px!important;padding:6px 12px!important;background:transparent!important;box-shadow:none!important;border:1.5px solid transparent!important;height:auto!important}}
+[role="tabpanel"] [role="tablist"] button *,[role="tabpanel"] [role="tablist"] [role="tab"] *{{color:inherit!important;font-weight:500!important;font-size:.88rem!important;white-space:nowrap}}
+[role="tabpanel"] [role="tablist"] [aria-selected="true"]{{background:rgba(0,179,134,.10)!important;border:1.5px solid rgba(0,179,134,.42)!important;box-shadow:none!important}}
+[role="tabpanel"] [role="tablist"] [aria-selected="true"] *{{color:{UP}!important;font-weight:700!important}}
+/* compact page: smaller title, refresh rows that never stack */
+[data-testid="stToolbar"],[data-testid="stDecoration"],[data-testid="stStatusWidget"],#MainMenu,footer{{display:none!important}}
+header[data-testid="stHeader"]{{height:2.4rem!important;min-height:0!important;background:transparent!important}}
+.block-container,[data-testid="stMainBlockContainer"]{{padding-top:2.6rem!important;padding-bottom:3rem!important}}
+[class*="st-key-card_box"]{{background:rgba(120,124,140,.07)!important;border-left:4px solid {UP}!important}}
+.gw-boxh{{font-size:1.02rem;font-weight:700;margin-bottom:6px}} .gw-boxh span{{display:block;font-size:.76rem;font-weight:400;opacity:.65;margin-top:1px}}
+.gw-title{{font-size:1.2rem;font-weight:700;line-height:1.2;margin-bottom:2px}} .gw-title span{{display:block;font-size:.72rem;font-weight:400;opacity:.62;margin-top:2px}}
+.st-key-topbar [data-testid="stHorizontalBlock"],.st-key-pfbar [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:6px!important;align-items:center!important}}
+.st-key-topbar [data-testid="stColumn"],.st-key-pfbar [data-testid="stColumn"],.st-key-topbar [data-testid="column"],.st-key-pfbar [data-testid="column"]{{min-width:0!important}}
+.st-key-topbar [data-testid="stColumn"]:last-child,.st-key-pfbar [data-testid="stColumn"]:last-child,.st-key-topbar [data-testid="column"]:last-child,.st-key-pfbar [data-testid="column"]:last-child{{flex:0 0 auto!important;width:auto!important}}
+.st-key-live_refresh button,.st-key-pf_refresh button{{border-radius:999px!important;padding:2px 12px!important;min-height:2.2rem!important}}
 </style>"""
