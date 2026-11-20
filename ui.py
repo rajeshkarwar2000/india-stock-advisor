@@ -3,6 +3,7 @@
 Everything here returns plain strings (no Streamlit import) so it can be unit-tested.
 HTML is built on one line: Streamlit's markdown turns indented lines into code blocks.
 """
+FILES_VERSION = 5
 import html as _h
 import json as _json
 
@@ -211,14 +212,15 @@ GROWW_CSS = f"""<style>
 .st-key-exec_sell button p{{color:#fff!important}}
 .st-key-exec_buy button{{background:{UP}!important;border:0!important}}
 .st-key-exec_buy button p{{color:#fff!important}}
-.st-key-mainnav [data-baseweb="tab-list"]{{background:rgba(118,118,128,.16)!important;border:0!important;border-radius:999px!important;padding:3px!important;gap:2px!important;backdrop-filter:none!important;box-shadow:none!important}}
-.st-key-mainnav [data-baseweb="tab-list"] button{{flex:1;justify-content:center;border-radius:999px!important;padding:8px 14px!important;background:transparent!important;border:0!important}}
-.st-key-mainnav [data-baseweb="tab-list"] button p{{font-weight:500!important}}
-.st-key-mainnav [data-baseweb="tab-list"] button[aria-selected="true"]{{background:#ffffff!important;box-shadow:0 2px 6px rgba(0,0,0,.20),0 0 0 .5px rgba(0,0,0,.06)!important}}
-.st-key-mainnav [data-baseweb="tab-list"] button[aria-selected="true"] p{{color:#111114!important;font-weight:700!important}}
+.st-key-mainnav [data-baseweb="tab-list"]{{position:sticky;top:3.6rem;z-index:99;background:rgba(255,255,255,.40)!important;backdrop-filter:blur(22px) saturate(190%)!important;-webkit-backdrop-filter:blur(22px) saturate(190%)!important;border:1px solid rgba(255,255,255,.80)!important;border-radius:999px!important;padding:4px!important;gap:2px!important;box-shadow:inset 0 1.5px 1px rgba(255,255,255,.95),inset 0 -1.5px 2px rgba(0,0,0,.06),0 10px 28px rgba(40,60,110,.20)!important}}
+.st-key-mainnav [data-baseweb="tab-list"] button{{flex:1;justify-content:center;border-radius:999px!important;padding:9px 12px!important;background:transparent!important;border:0!important}}
+.st-key-mainnav [data-baseweb="tab-list"] button p{{color:#5f6270!important;font-weight:600!important}}
+.st-key-mainnav [data-baseweb="tab-list"] button[aria-selected="true"]{{background:rgba(120,124,140,.20)!important;box-shadow:inset 0 1.5px 2px rgba(255,255,255,.75),inset 0 -1px 3px rgba(0,0,0,.10),0 1px 4px rgba(0,0,0,.08)!important}}
+.st-key-mainnav [data-baseweb="tab-list"] button[aria-selected="true"] p{{color:{UP}!important;font-weight:700!important}}
 .st-key-mainnav [data-baseweb="tab-highlight"],.st-key-mainnav [data-baseweb="tab-border"]{{display:none!important}}
-.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"]{{background:transparent!important;border-radius:0!important;padding:0!important;gap:4px!important;border-bottom:1px solid {GREY}40!important}}
-.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"] button{{flex:none;border-radius:0!important;padding:8px 12px!important;background:transparent!important;border-bottom:2px solid transparent!important}}
+.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"]{{position:static!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:none!important;background:transparent!important;border:0!important;border-bottom:1px solid {GREY}40!important;border-radius:0!important;padding:0!important;gap:4px!important}}
+.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"] button{{flex:none;border-radius:0!important;padding:8px 12px!important;background:transparent!important;box-shadow:none!important;border-bottom:2px solid transparent!important}}
+.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"] button p{{color:inherit!important;font-weight:500!important}}
 .st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"] button[aria-selected="true"]{{background:transparent!important;box-shadow:none!important;border-bottom:2px solid {UP}!important}}
 .st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"] button[aria-selected="true"] p{{color:{UP}!important;font-weight:700!important}}
 </style>"""

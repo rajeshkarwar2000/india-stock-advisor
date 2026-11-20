@@ -1,8 +1,36 @@
-import datetime as dt, json, os, re, time
+import datetime as dt, json, os, re, sys, time, zipfile
 from concurrent.futures import ThreadPoolExecutor
 from zoneinfo import ZoneInfo
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 import streamlit.components.v1 as components
+
+FILES_VERSION = 5     # engine.py and ui.py must carry the same number
+
+def _files_ok():
+    try:
+        import engine as _e, ui as _u
+        return getattr(_e, "FILES_VERSION", 0) >= FILES_VERSION and getattr(_u, "FILES_VERSION", 0) >= FILES_VERSION
+    except Exception:
+        return False
+
+if not _files_ok():
+    # app.py is newer than engine.py / ui.py (a partly updated repo). Repair them from the zip kept in the repo, if it is there.
+    _here = os.path.dirname(os.path.abspath(globals().get("__file__", "app.py")))
+    for _zp in (os.path.join(_here, "india-stock-advisor.zip"), "india-stock-advisor.zip"):
+        if os.path.exists(_zp):
+            try:
+                with zipfile.ZipFile(_zp) as _z:
+                    for _n in _z.namelist():
+                        if os.path.basename(_n) in ("engine.py", "ui.py", "gemini_client.py") and "/android/" not in _n and "/tests/" not in _n:
+                            with open(os.path.join(_here, os.path.basename(_n)), "wb") as _f: _f.write(_z.read(_n))
+            except Exception:
+                pass
+            break
+    for _m in ("engine", "ui", "gemini_client"): sys.modules.pop(_m, None)
+    if not _files_ok():
+        st.error("Some app files are older than app.py (engine.py or ui.py). Upload the newest india-stock-advisor.zip to the repo root "
+                 "(replace the old one), wait for the GitHub Action to finish, then reboot the app.")
+        st.stop()
 import engine as E
 import gemini_client as G
 import ui as U
