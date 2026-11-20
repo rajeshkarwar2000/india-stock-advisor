@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 import streamlit.components.v1 as components
 
-FILES_VERSION = 9     # engine.py and ui.py must carry the same number
+FILES_VERSION = 11     # engine.py and ui.py must carry the same number
 
 def _files_ok():
     try:
@@ -43,33 +43,7 @@ HZ = {"1M": "1 Month", "6M": "6 Months", "1Y": "1 Year"}
 KIND_HZ = E.HORIZON_TAGS                      # short -> 1M, mid -> 6M, long -> 1Y
 st.markdown('<div class="gw-title">📈 India Stock Advisor<span>Practice account with virtual money. Ideas are research aids, not guarantees or SEBI-registered advice.</span></div>', unsafe_allow_html=True)
 
-with st.sidebar:
-    with st.expander("👤 Demo account", expanded=True):
-        user = re.sub(r"[^a-z0-9_-]", "", st.text_input("Account name", "me").lower()) or "me"
-        capital = st.number_input("Capital for sizing ideas (₹)", 10000, 100000000, 100000, step=10000)
-        risk = st.slider("Max loss per trade (% of capital)", 0.5, 3.0, 1.0, 0.5)
-    with st.expander("⏱ Live refresh", expanded=True):
-        auto_on = st.toggle("Auto-refresh prices", True, help="A countdown at the top shows the time left. It pauses while a buy/sell window is open.")
-        every = st.select_slider("Refresh every", options=[15, 30, 60, 120, 300], value=60,
-                                 format_func=lambda s: f"{s} sec" if s < 60 else f"{s // 60} min")
-    with st.expander("💼 Portfolio refresh", expanded=True):
-        pf_auto = st.toggle("Auto-refresh my portfolio", True, help="Separate from the market-wide refresh above: only your holdings' prices.")
-        pf_every = st.select_slider("Portfolio refresh every", options=[10, 15, 30, 60, 120], value=30,
-                                    format_func=lambda s: f"{s} sec" if s < 60 else f"{s // 60} min")
-    with st.expander("💡 Ideas"):
-        topn = st.slider("How many ideas per list", 3, 15, 8)
-        uni = st.selectbox("Stock universe", list(E.UNIVERSES), help="Search any other company in Explore > Search & watchlist.")
-        extra = st.text_input("Add NSE symbols to the lists (comma-separated)", "")
-        research_on = st.checkbox("Use analyst & results data (slower)", True)
-    with st.expander("🛡 Order rules"):
-        auto_exec = st.checkbox("Auto-sell at stop-loss / target (demo)", True)
-    with st.expander("🤖 Gemini API key (optional)"):
-        try: _k = st.secrets.get("GEMINI_API_KEY", "")
-        except Exception: _k = ""
-        gkey = st.text_input("Gemini API key", value=_k or os.environ.get("GEMINI_API_KEY", ""), type="password",
-                             help="Free key from aistudio.google.com. Stored only for this session.")
-        gmodel = st.text_input("Gemini model", "gemini-flash-latest", help="Check ai.google.dev for current model names.")
-        gsearch = st.checkbox("Let Gemini search the web (Google Search)", True)
+user = re.sub(r"[^a-z0-9_-]", "", str(st.session_state.get("user_name", "me")).lower()) or "me"
 
 # ---------- demo account storage (one JSON file per account name) ----------
 os.makedirs("portfolios", exist_ok=True)
@@ -91,18 +65,69 @@ def box(title, key, sub=""):
         st.markdown(f'<div class="gw-boxh">{U.esc(title)}' + (f'<span>{U.esc(sub)}</span>' if sub else "") + "</div>", unsafe_allow_html=True)
         yield
 
-# ---------- appearance (saved per demo account) ----------
-_names = list(E.THEMES)
-with st.sidebar:
-    with st.expander("🎨 Appearance"):
-        th = st.selectbox("Theme", _names, index=_names.index(acct["theme"]) if acct.get("theme") in _names else _names.index(E.DEFAULT_THEME))
-        blur = st.slider("Glass blur", 0, 30, int(acct.get("blur", 16)), help="Lower is faster and saves battery. 0 = no blur.")
-        fs = st.slider("Text size", 14, 20, int(acct.get("fs", 16)))
-        hc = st.checkbox("High contrast (clearest text)", bool(acct.get("hc", False)))
-        anim = st.checkbox("Animated background", bool(acct.get("anim", True)))
-_cur = dict(theme=th, blur=blur, fs=fs, hc=hc, anim=anim)
-if any(acct.get(k) != v for k, v in _cur.items()): acct.update(_cur); save()
-st.markdown(E.theme_css(th, blur, 22, anim, fs, hc) + U.GROWW_CSS, unsafe_allow_html=True)
+# ---------- settings: the ⚙️ window in the top bar. Kept for the session and saved with the demo account ----------
+APPEARANCE = ("theme", "blur", "fs", "hc", "anim")
+DEFAULTS = dict(capital=100000, risk=1.0, auto_on=True, every=60, pf_auto=True, pf_every=30, topn=8, uni=list(E.UNIVERSES)[0], extra="",
+                research_on=True, auto_exec=True, gmodel="gemini-flash-latest", gsearch=True,
+                theme=E.DEFAULT_THEME, blur=16, fs=16, hc=False, anim=True)
+S = {**DEFAULTS, **{k: acct[k] for k in APPEARANCE if k in acct}, **acct.get("settings", {}), **st.session_state.get("cfg", {})}
+if S["uni"] not in E.UNIVERSES: S["uni"] = DEFAULTS["uni"]
+if S["theme"] not in E.THEMES: S["theme"] = E.DEFAULT_THEME
+if acct.get("settings") != {k: S[k] for k in DEFAULTS}: acct["settings"] = {k: S[k] for k in DEFAULTS}; save()
+capital, risk, auto_on, every, pf_auto, pf_every = S["capital"], S["risk"], S["auto_on"], S["every"], S["pf_auto"], S["pf_every"]
+topn, uni, extra, research_on, auto_exec, gmodel, gsearch = S["topn"], S["uni"], S["extra"], S["research_on"], S["auto_exec"], S["gmodel"], S["gsearch"]
+th, blur, fs, hc, anim = S["theme"], S["blur"], S["fs"], S["hc"], S["anim"]
+try: _k = st.secrets.get("GEMINI_API_KEY", "")
+except Exception: _k = ""
+gkey = st.session_state.get("gkey") or _k or os.environ.get("GEMINI_API_KEY", "")
+def inject_css(css_html):
+    """Put the CSS straight into the page <head> (a markdown block gets cut off partway and prints as text)."""
+    css = re.sub(r"</?style[^>]*>", "", css_html)
+    components.html("<script>try{const d=window.parent.document;let s=d.getElementById('gw-css');if(!s){s=d.createElement('style');s.id='gw-css';d.head.appendChild(s)}"
+                    "s.textContent=" + json.dumps(css).replace("</", "<\\/") + ";}catch(e){}</script>", height=0)
+inject_css(E.theme_css(th, blur, 22, anim, fs, hc) + U.GROWW_CSS)
+
+_secs = lambda s: f"{s} sec" if s < 60 else f"{s // 60} min"
+@st.dialog("⚙️ Settings", width="large")
+def settings_dialog():
+    st.caption("Tap a section to open it. Your changes apply when you tap **Save & apply**.")
+    with st.expander("👤  Account", expanded=True):
+        n_user = st.text_input("Demo account name", user, key="st_user", help="Each name keeps its own virtual portfolio.")
+        n_cap = st.number_input("Capital for sizing ideas (₹)", 10000, 100000000, int(S["capital"]), step=10000, key="st_cap")
+        n_risk = st.slider("Max loss per trade (% of capital)", 0.5, 3.0, float(S["risk"]), 0.5, key="st_risk")
+    with st.expander("⏱  Market refresh"):
+        n_auto = st.toggle("Auto-refresh market prices", bool(S["auto_on"]), key="st_auto", help="The countdown at the top shows the time left. It pauses while a buy/sell window is open.")
+        n_every = st.select_slider("Refresh every", options=[15, 30, 60, 120, 300], value=S["every"] if S["every"] in (15, 30, 60, 120, 300) else 60, format_func=_secs, key="st_every")
+    with st.expander("💼  Portfolio refresh"):
+        n_pauto = st.toggle("Auto-refresh my portfolio", bool(S["pf_auto"]), key="st_pauto", help="Separate from the market refresh: only your holdings' prices.")
+        n_pevery = st.select_slider("Portfolio refresh every", options=[10, 15, 30, 60, 120], value=S["pf_every"] if S["pf_every"] in (10, 15, 30, 60, 120) else 30, format_func=_secs, key="st_pevery")
+    with st.expander("💡  Ideas & scan"):
+        n_topn = st.slider("How many ideas per list", 3, 15, int(S["topn"]), key="st_topn")
+        n_uni = st.selectbox("Stock universe", list(E.UNIVERSES), index=list(E.UNIVERSES).index(S["uni"]), key="st_uni", help="Search any other company in Explore > Search & watchlist.")
+        n_extra = st.text_input("Add NSE symbols to the lists (comma-separated)", S["extra"], key="st_extra")
+        n_res = st.checkbox("Use analyst & results data (slower)", bool(S["research_on"]), key="st_res")
+    with st.expander("🛡  Order rules"):
+        n_aex = st.checkbox("Auto-sell at stop-loss / target (demo)", bool(S["auto_exec"]), key="st_aex", help="Checked whenever the app is open.")
+    with st.expander("🤖  Gemini"):
+        n_gkey = st.text_input("Gemini API key (optional)", gkey, type="password", key="st_gkey", help="Free key from aistudio.google.com. Kept only for this session, never saved to disk.")
+        n_gmodel = st.text_input("Gemini model", S["gmodel"], key="st_gmodel", help="Check ai.google.dev for current model names.")
+        n_gsearch = st.checkbox("Let Gemini search the web (Google Search)", bool(S["gsearch"]), key="st_gsearch")
+    with st.expander("🎨  Appearance"):
+        n_theme = st.selectbox("Theme", list(E.THEMES), index=list(E.THEMES).index(S["theme"]), key="st_theme")
+        n_blur = st.slider("Glass blur", 0, 30, int(S["blur"]), key="st_blur", help="Lower is faster and saves battery. 0 = no blur.")
+        n_fs = st.slider("Text size", 14, 20, int(S["fs"]), key="st_fs")
+        n_hc = st.checkbox("High contrast (clearest text)", bool(S["hc"]), key="st_hc")
+        n_anim = st.checkbox("Animated background", bool(S["anim"]), key="st_anim")
+    c1, c2 = st.columns(2)
+    if c1.button("💾 Save & apply", type="primary", key="st_save", use_container_width=True):
+        st.session_state["cfg"] = dict(capital=int(n_cap), risk=float(n_risk), auto_on=bool(n_auto), every=int(n_every), pf_auto=bool(n_pauto), pf_every=int(n_pevery),
+                                       topn=int(n_topn), uni=n_uni, extra=n_extra.strip(), research_on=bool(n_res), auto_exec=bool(n_aex),
+                                       gmodel=n_gmodel.strip() or DEFAULTS["gmodel"], gsearch=bool(n_gsearch), theme=n_theme, blur=int(n_blur), fs=int(n_fs), hc=bool(n_hc), anim=bool(n_anim))
+        st.session_state["user_name"] = re.sub(r"[^a-z0-9_-]", "", n_user.lower()) or "me"; st.session_state["gkey"] = n_gkey.strip()
+        flash("⚙️ Settings saved"); st.rerun()
+    if c2.button("↩️  Restore defaults", key="st_reset", use_container_width=True):
+        st.session_state["cfg"] = dict(DEFAULTS); flash("Settings restored to defaults"); st.rerun()
+
 for _m in st.session_state.pop("flash", []): st.toast(_m)
 
 # ---------- data ----------
@@ -427,9 +452,10 @@ st.markdown(U.live_bar_html(mo, _iq, ""), unsafe_allow_html=True)
 if _iq.get("Nifty 50") and _iq["Nifty 50"][1] <= -1.0:
     st.warning(f"The market is down {_iq['Nifty 50'][1]:.1f}% (Nifty). New buys are riskier on days like this, so consider waiting and keep your stop-losses on.")
 with st.container(key="topbar"):
-    _l2, _l3 = st.columns([6, 1], vertical_alignment="center")
+    _l2, _l3, _l4 = st.columns([6, 1, 1], vertical_alignment="center")
     with _l2: components.html(U.countdown_html(every if auto_on else 0, NONCE, True, "Market refresh in"), height=34)
     _l3.button("🔄", key="live_refresh", on_click=refresh_now, help="Refresh market prices now")
+    if _l4.button("⚙️", key="open_settings", help="Settings"): settings_dialog()
 
 # ---------- Buy window (like Groww: product, order type, quantity, price) ----------
 @st.dialog("Buy")
@@ -865,9 +891,9 @@ def review_view():
             if len(mine) < len(rv["items"]): st.caption(f"{len(rv['items']) - len(mine)} suggestion(s) about stocks you don't hold were hidden.")
             rec_cards(mine, "rv", f"Gemini review pasted {rv['ts']} · AI opinion, can be wrong, not SEBI-registered advice")
             if st.button("Clear review", key="rv_clear"): acct.pop("review", None); save(); st.rerun()
-    with box("③ Ask Gemini: API key", "r3", "One tap if you added a key in the sidebar"):
+    with box("③ Ask Gemini: API key", "r3", "One tap if you added a key in ⚙️ Settings"):
         if st.button("⚡ Review my portfolio now", use_container_width=True, key="rv_api"):
-            if not gkey: st.error("Add your Gemini API key in the sidebar first (free at aistudio.google.com).")
+            if not gkey: st.error("Add your Gemini API key in ⚙️ Settings first (free at aistudio.google.com).")
             else:
                 with st.spinner("Gemini is reviewing your portfolio…"):
                     try:
@@ -886,7 +912,7 @@ def account_view():
     with box("⚠️ Reset account", "a2", "Starts again with fresh virtual cash"):
         new_cash = st.number_input("Reset with starting cash (₹)", 10000, 100000000, int(acct["start_cash"]), step=50000)
         if st.button("⚠️ Reset account"):
-            keep = {k: acct[k] for k in ("theme", "blur", "fs", "hc", "anim") if k in acct}
+            keep = {k: acct[k] for k in ("theme", "blur", "fs", "hc", "anim", "settings") if k in acct}
             acct.clear(); acct.update(start_cash=float(new_cash), trades=[], **keep); save(); st.rerun()
     st.caption("Demo only: virtual money, no brokerage, taxes or slippage. Market orders fill at the latest available price (can be a few minutes delayed). "
                "Limit orders and stop-loss / target sells are checked whenever the app is open. Intraday positions are squared off at 3:20 PM. "
@@ -987,7 +1013,7 @@ with t_ai:
             q = st.chat_input("Ask about any stock, strategy or your portfolio…") or quick
             if q:
                 if not gkey:
-                    st.error("Add your Gemini API key in the sidebar first (free at aistudio.google.com).")
+                    st.error("Add your Gemini API key in ⚙️ Settings first (free at aistudio.google.com).")
                 else:
                     chat.append(dict(role="user", text=q)); st.chat_message("user").write(q)
                     with st.chat_message("assistant"), st.spinner("Gemini is thinking…"):

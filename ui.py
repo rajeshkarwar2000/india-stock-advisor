@@ -3,7 +3,7 @@
 Everything here returns plain strings (no Streamlit import) so it can be unit-tested.
 HTML is built on one line: Streamlit's markdown turns indented lines into code blocks.
 """
-FILES_VERSION = 9
+FILES_VERSION = 11
 import html as _h
 import json as _json
 
@@ -212,19 +212,17 @@ GROWW_CSS = f"""<style>
 .st-key-exec_sell button p{{color:#fff!important}}
 .st-key-exec_buy button{{background:{UP}!important;border:0!important}}
 .st-key-exec_buy button p{{color:#fff!important}}
-/* main ribbon = the only tab list that is not inside a tab panel: iOS Liquid Glass capsule */
 [role="tablist"]{{position:sticky;top:2.6rem;z-index:99;background:rgba(255,255,255,.42)!important;backdrop-filter:blur(22px) saturate(190%)!important;-webkit-backdrop-filter:blur(22px) saturate(190%)!important;border:1px solid rgba(255,255,255,.85)!important;border-radius:999px!important;padding:4px!important;gap:2px!important;box-shadow:inset 0 1.5px 1px rgba(255,255,255,.95),inset 0 -1.5px 2px rgba(0,0,0,.06),0 8px 22px rgba(40,60,110,.16)!important}}
 [role="tablist"] button,[role="tablist"] [role="tab"]{{flex:1 1 auto;justify-content:center;white-space:nowrap;border-radius:999px!important;padding:8px 8px!important;background:transparent!important;border:1.5px solid transparent!important;box-shadow:none!important;height:auto!important}}
 [role="tablist"] button *,[role="tablist"] [role="tab"] *{{color:#5f6270!important;font-weight:600!important;font-size:.9rem!important;white-space:nowrap}}
-[role="tablist"] [aria-selected="true"]{{background:rgba(255,255,255,.28)!important;border:1.5px solid rgba(0,179,134,.45)!important;box-shadow:inset 0 1px 2px rgba(255,255,255,.8),0 1px 5px rgba(0,179,134,.18)!important}}
+[role="tablist"] [aria-selected="true"]{{background:rgba(110,115,130,.22)!important;border:1.5px solid transparent!important;box-shadow:inset 0 1.5px 2px rgba(255,255,255,.75),inset 0 -1px 4px rgba(0,0,0,.10)!important}}
 [role="tablist"] [aria-selected="true"] *{{color:{UP}!important;font-weight:700!important}}
-[role="tablist"] > div:empty,[role="tablist"] [data-baseweb="tab-highlight"],[role="tablist"] [data-baseweb="tab-border"]{{display:none!important}}
+[role="tablist"] div:empty,[role="tablist"] [data-baseweb*="highlight"],[role="tablist"] [data-baseweb*="border"],[role="tablist"] [role="tab"]::before,[role="tablist"] [role="tab"]::after,[role="tablist"] button::before,[role="tablist"] button::after{{display:none!important;content:none!important}}
 [role="tabpanel"] [role="tablist"]{{position:static!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:none!important;background:transparent!important;border:0!important;border-radius:0!important;padding:2px 0!important;gap:4px!important}}
 [role="tabpanel"] [role="tablist"] button,[role="tabpanel"] [role="tablist"] [role="tab"]{{flex:none;border-radius:999px!important;padding:6px 12px!important;background:transparent!important;box-shadow:none!important;border:1.5px solid transparent!important;height:auto!important}}
 [role="tabpanel"] [role="tablist"] button *,[role="tabpanel"] [role="tablist"] [role="tab"] *{{color:inherit!important;font-weight:500!important;font-size:.88rem!important;white-space:nowrap}}
-[role="tabpanel"] [role="tablist"] [aria-selected="true"]{{background:rgba(0,179,134,.10)!important;border:1.5px solid rgba(0,179,134,.42)!important;box-shadow:none!important}}
+[role="tabpanel"] [role="tablist"] [aria-selected="true"]{{background:rgba(110,115,130,.16)!important;border:1.5px solid transparent!important;box-shadow:inset 0 1px 2px rgba(255,255,255,.6)!important}}
 [role="tabpanel"] [role="tablist"] [aria-selected="true"] *{{color:{UP}!important;font-weight:700!important}}
-/* compact page: smaller title, refresh rows that never stack */
 [data-testid="stToolbar"],[data-testid="stDecoration"],[data-testid="stStatusWidget"],#MainMenu,footer{{display:none!important}}
 header[data-testid="stHeader"]{{height:2.4rem!important;min-height:0!important;background:transparent!important}}
 .block-container,[data-testid="stMainBlockContainer"]{{padding-top:2.6rem!important;padding-bottom:3rem!important}}
@@ -233,6 +231,6 @@ header[data-testid="stHeader"]{{height:2.4rem!important;min-height:0!important;b
 .gw-title{{font-size:1.2rem;font-weight:700;line-height:1.2;margin-bottom:2px}} .gw-title span{{display:block;font-size:.72rem;font-weight:400;opacity:.62;margin-top:2px}}
 .st-key-topbar [data-testid="stHorizontalBlock"],.st-key-pfbar [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:6px!important;align-items:center!important}}
 .st-key-topbar [data-testid="stColumn"],.st-key-pfbar [data-testid="stColumn"],.st-key-topbar [data-testid="column"],.st-key-pfbar [data-testid="column"]{{min-width:0!important}}
-.st-key-topbar [data-testid="stColumn"]:last-child,.st-key-pfbar [data-testid="stColumn"]:last-child,.st-key-topbar [data-testid="column"]:last-child,.st-key-pfbar [data-testid="column"]:last-child{{flex:0 0 auto!important;width:auto!important}}
-.st-key-live_refresh button,.st-key-pf_refresh button{{border-radius:999px!important;padding:2px 12px!important;min-height:2.2rem!important}}
+.st-key-topbar [data-testid="stColumn"]:not(:first-child),.st-key-pfbar [data-testid="stColumn"]:not(:first-child),.st-key-topbar [data-testid="column"]:not(:first-child),.st-key-pfbar [data-testid="column"]:not(:first-child){{flex:0 0 auto!important;width:auto!important}}
+.st-key-live_refresh button,.st-key-pf_refresh button,.st-key-open_settings button{{border-radius:999px!important;padding:2px 12px!important;min-height:2.2rem!important}}
 </style>"""
