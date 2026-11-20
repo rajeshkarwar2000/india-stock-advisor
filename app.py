@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 import streamlit.components.v1 as components
 
-FILES_VERSION = 5     # engine.py and ui.py must carry the same number
+FILES_VERSION = 7     # engine.py and ui.py must carry the same number
 
 def _files_ok():
     try:
@@ -416,7 +416,10 @@ def style_df(df, pnl=(), side=None, fmt=None):
 
 # ---------- live bar: market status, indices, countdown, refresh ----------
 _l1, _l2, _l3 = st.columns([5, 4, 1.4], vertical_alignment="center")
-_l1.markdown(U.live_bar_html(mo, index_quotes(), now_ist().strftime("%H:%M:%S IST")), unsafe_allow_html=True)
+_iq = index_quotes()
+_l1.markdown(U.live_bar_html(mo, _iq, now_ist().strftime("%H:%M:%S IST")), unsafe_allow_html=True)
+if _iq.get("Nifty 50") and _iq["Nifty 50"][1] <= -1.0:
+    st.warning(f"The market is down {_iq['Nifty 50'][1]:.1f}% (Nifty). New buys are riskier on days like this, so consider waiting and keep your stop-losses on.")
 with _l2: components.html(U.countdown_html(every if auto_on else 0, NONCE, True), height=36)
 _l3.button("🔄 Refresh", key="live_refresh", on_click=refresh_now, use_container_width=True)
 
@@ -436,13 +439,16 @@ def buy_dialog(sym, name, price, dpct, stop=None, target=None, qty=1, horizon="1
     if otype == "Limit": lim = c2.number_input("Limit price (₹)", 0.05, 10_000_000.0, float(round(price, 2)), step=0.05, key=k + "lim")
     else: lim = None; c2.text_input("Price", "At market", disabled=True, key=k + "mk")
     hz = st.radio("Investment horizon", list(HZ.values()), index=list(HZ).index(horizon) if horizon in HZ else 0, horizontal=True, key=k + "hz")
-    with st.expander("Stop-loss & target (optional)", expanded=bool(stop or target)):
-        sl = st.number_input("Stop-loss (₹): sells automatically if the price falls to it", 0.0, 10_000_000.0, float(round(stop, 2)) if stop else 0.0, step=0.05, key=k + "sl")
+    with st.expander("🛡 Stop-loss (required) & target (optional)", expanded=True):
+        sl = st.number_input("Stop-loss (₹): sells automatically if the price falls to it. Limits your loss.", 0.0, 10_000_000.0,
+                             float(round(stop, 2)) if stop else float(round(price * 0.93, 2)), step=0.05, key=k + "sl",
+                             help="Default is 7% below the price. A stop-loss caps the loss on this stock but can't remove it (gaps can fill below it).")
         tg = st.number_input("Target (₹): sells automatically when the price reaches it", 0.0, 10_000_000.0, float(round(target, 2)) if target else 0.0, step=0.05, key=k + "tg")
     at = lim or price; need = q * at; cash_ = E.cash_balance(acct["start_cash"], acct["trades"])
     st.markdown(U.order_box_html([("Order value", U.esc(U.inr(need))), ("Available cash", U.esc(U.inr(cash_))),
                                   ("Cash after order", f'<span class="gw-{"up" if cash_ >= need else "down"}">{U.esc(U.inr(cash_ - need))}</span>')]), unsafe_allow_html=True)
     errs = []
+    if not sl: errs.append("A stop-loss is required: it limits how much this stock can lose.")
     if sl and sl >= at: errs.append("Stop-loss must be below the buy price.")
     if tg and tg <= at: errs.append("Target must be above the buy price.")
     if need > cash_: errs.append("Not enough virtual cash for this order.")
@@ -456,6 +462,7 @@ def buy_dialog(sym, name, price, dpct, stop=None, target=None, qty=1, horizon="1
             save(); flash(f"🕒 Limit order placed: buy {q} {sym} at ₹{lim:,.2f} or lower")
         else:
             fresh = live_prices((sym,)).get(sym); fill = float(fresh) if fresh else price
+            if sl >= fill: st.error("The price just moved to or below your stop-loss. Lower the stop-loss and try again."); return
             err = trade(sym, "BUY", q, fill, sl or None, tg or None, product, HZ_REV[hz])
             if err: st.error(err); return
             flash(f"✅ Bought {q} {sym} @ ₹{fill:,.2f}")
@@ -661,7 +668,7 @@ def search_view():
                 if b3.button("Remove", key=f"wr_{i}", use_container_width=True): acct["watch"].remove(s); save(); st.rerun()
 
 with st.container(key="mainnav"):      # the main ribbon: styled as iPhone-style pills (see ui.GROWW_CSS)
-    t_ex, t_pf, t_ai, t_tools = st.tabs(["🔎 Explore", "💼 Portfolio", "🤖 Gemini ideas", "🛠 Tools"])
+    t_ex, t_pf, t_ai, t_tools = st.tabs(["🔎 Explore", "💼 Portfolio", "🤖 Gemini", "🛠 Tools"])
 with t_ex:
     e1, e6, e12, e_scan, e_find = st.tabs(["1 Month", "6 Months", "1 Year", "🚀 Scan all stocks", "🔍 Search & watchlist"])
     with e1: show_ideas("short", "i1m", 1, 10, "Short-term momentum ideas for about 1 month.")
@@ -675,10 +682,25 @@ with t_ex:
 # ======================================================================
 # Portfolio
 # ======================================================================
+def protect_all():
+    """Give every holding a stop-loss: 7% below the price, or at your buy price once you are comfortably in profit. Never lowers a stop."""
+    n = 0
+    for r in rows:
+        s, last, avg = r["symbol"], r["ltp"], r["avg"]
+        want = avg if last >= avg * 1.02 else last * 0.93
+        want = round(min(want, last * 0.995), 2)
+        if want > (r["stop"] or 0):
+            acct.setdefault("levels", {}).setdefault(s, {})["stop"] = want; n += 1
+    save(); flash(f"🛡 Stop-loss set or raised on {n} holding{'s' if n != 1 else ''}" if n else "All holdings already have a stop-loss at or above this level.")
+
 def holdings_view():
     st.markdown(U.summary_html(perf, day_total, day_total_pct, len(rows)), unsafe_allow_html=True)
     if not rows:
         st.info("No holdings yet. Open **Explore**, pick an idea and tap **Buy**."); return
+    nostop = [r["symbol"] for r in rows if not r["stop"]]
+    if nostop: st.warning("No stop-loss on: " + ", ".join(nostop) + ". Without one, a falling stock keeps losing.")
+    st.button("🛡 Protect all holdings (set / raise stop-loss)", key="protect_all", on_click=protect_all, use_container_width=True,
+              help="Stop-loss 7% below the price, or at your buy price once you are 2% or more in profit. It sells automatically (while the app is open) to cap the loss.")
     f1, f2 = st.columns(2)
     sort = f1.selectbox("Sort by", ["Returns %", "Returns ₹", "Today %", "Current value", "A–Z"], key="pf_sort")
     flt = f2.selectbox("Show", ["All", "1 Month", "6 Months", "1 Year", "In profit", "In loss", "SELL signal"], key="pf_flt")
