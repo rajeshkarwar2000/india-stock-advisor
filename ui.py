@@ -160,9 +160,8 @@ def order_box_html(rows):
     return '<div class="gw-box">' + "".join(_kv(k, v) for k, v in rows) + "</div>"
 
 
-def countdown_html(seconds, nonce, fire=True, label="Next refresh in"):
-    """Countdown to the next price refresh. When it reaches zero it taps the app's hidden-in-plain-sight
-    Refresh button (class st-key-live_refresh), unless a buy/sell window is open. fire=False: display only."""
+def countdown_html(seconds, nonce, fire=True, label="Next refresh in", target="live_refresh"):
+    """Countdown to the next price refresh. When it reaches zero it taps the Refresh button whose key is `target`, unless a buy/sell window is open. fire=False: display only."""
     if not seconds:
         return ('<div style="font:600 13px system-ui,sans-serif;color:#8a8fa3;padding:6px 0">'
                 'Auto-refresh is off. Use Refresh.</div><!--%s-->' % esc(nonce))
@@ -174,7 +173,7 @@ def countdown_html(seconds, nonce, fire=True, label="Next refresh in"):
 const total={int(seconds)}, fire={_json.dumps(bool(fire))}, end=Date.now()+total*1000, T=document.getElementById('t'), B=document.getElementById('b');
 function go(){{try{{const d=window.parent.document;
  if(d.querySelector('div[role="dialog"], [data-testid="stDialog"]')){{T.textContent='Paused while an order window is open';setTimeout(go,3000);return;}}
- const b=d.querySelector('.st-key-live_refresh button'); if(b){{T.textContent='Refreshing…';b.click();}} else {{T.textContent='Tap Refresh'}}
+ const b=d.querySelector('.st-key-{target} button'); if(b){{T.textContent='Refreshing…';b.click();}} else {{T.textContent='Tap Refresh'}}
 }}catch(e){{T.textContent='Tap Refresh to update'}}}}
 const iv=setInterval(()=>{{const l=Math.max(0,Math.ceil((end-Date.now())/1000));
  T.textContent={_json.dumps(label)}+' '+l+'s'; B.style.width=(l/total*100)+'%';
@@ -212,4 +211,14 @@ GROWW_CSS = f"""<style>
 .st-key-exec_sell button p{{color:#fff!important}}
 .st-key-exec_buy button{{background:{UP}!important;border:0!important}}
 .st-key-exec_buy button p{{color:#fff!important}}
+.st-key-mainnav [data-baseweb="tab-list"]{{background:rgba(118,118,128,.16)!important;border:0!important;border-radius:999px!important;padding:3px!important;gap:2px!important;backdrop-filter:none!important;box-shadow:none!important}}
+.st-key-mainnav [data-baseweb="tab-list"] button{{flex:1;justify-content:center;border-radius:999px!important;padding:8px 14px!important;background:transparent!important;border:0!important}}
+.st-key-mainnav [data-baseweb="tab-list"] button p{{font-weight:500!important}}
+.st-key-mainnav [data-baseweb="tab-list"] button[aria-selected="true"]{{background:#ffffff!important;box-shadow:0 2px 6px rgba(0,0,0,.20),0 0 0 .5px rgba(0,0,0,.06)!important}}
+.st-key-mainnav [data-baseweb="tab-list"] button[aria-selected="true"] p{{color:#111114!important;font-weight:700!important}}
+.st-key-mainnav [data-baseweb="tab-highlight"],.st-key-mainnav [data-baseweb="tab-border"]{{display:none!important}}
+.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"]{{background:transparent!important;border-radius:0!important;padding:0!important;gap:4px!important;border-bottom:1px solid {GREY}40!important}}
+.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"] button{{flex:none;border-radius:0!important;padding:8px 12px!important;background:transparent!important;border-bottom:2px solid transparent!important}}
+.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"] button[aria-selected="true"]{{background:transparent!important;box-shadow:none!important;border-bottom:2px solid {UP}!important}}
+.st-key-mainnav [data-baseweb="tab-panel"] [data-baseweb="tab-list"] button[aria-selected="true"] p{{color:{UP}!important;font-weight:700!important}}
 </style>"""

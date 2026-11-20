@@ -55,8 +55,8 @@ Results are cached in scan_cache/ so reopening is instant; re-run for fresh pric
 - **Layout:** four groups. Explore (1 Month / 6 Months / 1 Year ideas, Scan all stocks, Search & watchlist), Portfolio (Holdings cards, Orders, P&L report, Growth, AI review, Account), Gemini AI, Tools.
 - **Cards and tags:** every stock is a card with its current price, today's move, tags (1M / 6M / 1Y horizon, BUY / HOLD / SELL, risk, momentum, analyst view) and green/red profit and loss in ₹ and %.
 - **Buy / Sell windows:** Delivery or Intraday (sold at 3:20 PM), Market or Limit, quantity, horizon and optional stop-loss and target. Limit orders wait in Portfolio > Orders.
-- **Live portfolio:** buy price next to current price, returns in ₹ and %, today's returns, a stop-loss to target bar, live net-worth chart. A countdown at the top shows the time to the next refresh; Refresh buttons sit at the top and in Portfolio. The countdown pauses while a buy/sell window is open. Change the interval in the sidebar.
+- **Live portfolio:** buy price next to current price, returns in ₹ and %, today's returns, a stop-loss to target bar, live net-worth chart. A countdown at the top shows the time to the next refresh; The top Refresh updates the market; **Refresh portfolio** (with its own timer and interval) updates only your holdings. The countdown pauses while a buy/sell window is open. Change the interval in the sidebar.
 - **P&L report:** every closed trade and a per-stock summary. Realised + unrealised always equals net worth minus starting cash (charges ignored).
-- **AI review:** instant rule-based check, a separate Gemini prompt for your holdings (copy & paste, or API key) and action buttons for the reply.
+- **Portfolio review (Gemini):** its own tab: instant rule-based check, a separate Gemini prompt for your holdings (copy & paste, or API key) and action buttons for the reply.
 - **Scan all stocks:** every NSE-listed company (~2,000+), with progress and time left; rank by 1M / 6M / 1Y. If NSE's list won't download, upload EQUITY_L.csv.
 - Needs Streamlit 1.40 or newer (buy/sell windows).

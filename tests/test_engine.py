@@ -170,8 +170,9 @@ def test_review_prompt_and_parse():
     import datetime as dt
     rows = [dict(symbol="TCS", qty=3, avg=3000, ltp=3100, pnl=300, pnl_pct=3.3, weight=60, stop=2900, target=3500, horizon="6M", signal="HOLD")]
     perf = dict(current=1e5, invested=9e4, cash=9e5, unrealised=1e4, unrealised_pct=11.1, realised=500, closed=2, win_rate=50)
-    p = E.build_review_prompt(rows, perf, dt.date(2026, 11, 19), "note", "ctx")
+    p = E.build_review_prompt(rows, perf, dt.date(2026, 11, 19))
     assert "TCS: 3 shares" in p and "JSON array" in p and "Sell part" in p
+    assert "ONLY the holdings" in p and "Buy new" not in p and "ANY company" not in p and "shortlist" not in p
     out = E.parse_review('ok [{"symbol":"NSE:TCS","action":"Sell part","qty":"2","new_stop_loss":2950,"horizon":"6 months"},{"symbol":"ITC","action":"Buy new","qty":10},{"symbol":"A","action":"Hold"}]')
     assert [(o["symbol"], o["action"], o["qty"]) for o in out] == [("TCS", "SELL PART", 2), ("ITC", "BUY NEW", 10), ("A", "HOLD", 0)]
     assert out[0]["stop"] == 2950 and out[0]["horizon"] == "6M" and E.parse_review("nothing") is None

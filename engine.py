@@ -373,29 +373,31 @@ def market_open(now):
     """NSE cash hours (Mon-Fri 9:15-15:30). `now` should be an India-time datetime. Holidays are not checked."""
     return now.weekday() < 5 and _dt.time(9, 15) <= now.time() <= _dt.time(15, 30)
 
-# ---------- Portfolio review (separate prompt for your holdings) ----------
-_REVIEW_FORMAT = ('Reply ONLY with a JSON array (no other text, no markdown): one object for EVERY holding below, plus up to 3 extra '
-                  '"Buy new" objects that would diversify the portfolio. Each object exactly like: '
-                  '{"symbol":"NSE symbol","action":"Hold | Buy more | Sell part | Sell all | Buy new","qty":number of shares to buy or sell (0 for Hold),'
-                  '"new_stop_loss":number or null,"new_target":number or null,"horizon":"1 month | 6 months | 1 year",'
-                  '"confidence":"low | medium | high","reason":"max 2 sentences","risk":"1 sentence"}')
+# ---------- Portfolio review (your holdings ONLY) ----------
+REVIEW_SYSTEM = ("You are a cautious equity research assistant for an Indian retail investor (NSE/BSE, prices in ₹). "
+                 "You review ONLY the holdings the investor lists. Never suggest, compare or mention any stock that is not in the list, "
+                 "and do not give market outlook or new stock ideas. Never promise returns. This is not SEBI-registered investment advice.")
+_REVIEW_FORMAT = ('Reply ONLY with a JSON array (no other text, no markdown): exactly one object for EVERY holding listed above and no other objects. '
+                  'Each object exactly like: {"symbol":"NSE symbol as listed","action":"Hold | Buy more | Sell part | Sell all",'
+                  '"qty":number of shares to buy or sell (0 for Hold),"new_stop_loss":number or null,"new_target":number or null,'
+                  '"horizon":"1 month | 6 months | 1 year","confidence":"low | medium | high","reason":"max 2 sentences","risk":"1 sentence"}')
 
-def build_review_prompt(rows, perf, today, notes="", context=""):
-    """rows: list of dicts with symbol, qty, avg, ltp, pnl, pnl_pct, weight, stop, target, horizon, signal."""
+def build_review_prompt(rows, perf, today):
+    """Prompt that covers ONLY the user's holdings. rows: dicts with symbol, qty, avg, ltp, pnl, pnl_pct, weight, stop, target, horizon, signal."""
     n = lambda v, d=2: "n/a" if v is None or v != v else f"{v:,.{d}f}"
     lines = [f"- {r['symbol']}: {r['qty']} shares, bought avg Rs {n(r['avg'])}, now Rs {n(r['ltp'])}, P&L Rs {n(r['pnl'])} ({n(r['pnl_pct'])}%), "
              f"{n(r['weight'], 1)}% of holdings, stop-loss {n(r.get('stop'))}, target {n(r.get('target'))}, "
-             f"planned horizon {r.get('horizon') or 'not set'}, app signal {r.get('signal', 'n/a')}" for r in rows] or ["- (no holdings yet)"]
-    head = (f"Portfolio value Rs {n(perf['current'], 0)} (invested Rs {n(perf['invested'], 0)}), virtual cash Rs {n(perf['cash'], 0)}, "
-            f"unrealised P&L Rs {n(perf['unrealised'], 0)} ({n(perf['unrealised_pct'])}%), realised P&L Rs {n(perf['realised'], 0)}, "
-            f"closed trades {perf['closed']} with {n(perf['win_rate'], 0)}% winners.")
-    return (f"You are a cautious, thorough equity research assistant for an Indian retail investor (NSE/BSE, prices in ₹). "
-            f"Today is {today:%d %b %Y}.\nTASK: Review my demo portfolio. For each holding say Hold, Buy more, Sell part or Sell all, "
-            f"with a quantity, a better stop-loss and target, and the reason. Check concentration (any stock or sector too large), "
-            f"stocks that are losing money for a reason that has not changed, and winners worth protecting. Be balanced and include the bear case.\n"
-            f"{RESEARCH_RULES}\n\nMy portfolio:\n{head}\n" + "\n".join(lines)
-            + (f"\n\nMy own notes:\n{notes}" if notes else "") + (f"\n\nApp data (one input only):\n{context}" if context else "")
-            + f"\n\n{_REVIEW_FORMAT}")
+             f"planned horizon {r.get('horizon') or 'not set'}" for r in rows] or ["- (no holdings yet)"]
+    head = (f"Holdings value Rs {n(perf['current'], 0)} (invested Rs {n(perf['invested'], 0)}), unrealised P&L Rs {n(perf['unrealised'], 0)} "
+            f"({n(perf['unrealised_pct'])}%).")
+    return (f"You are a cautious, thorough equity research assistant for an Indian retail investor (NSE/BSE, prices in ₹). Today is {today:%d %b %Y}.\n"
+            f"TASK: Review ONLY the holdings listed below. Do not suggest, compare or mention any stock that is not in the list, and do not give market outlook or new ideas.\n"
+            f"For each holding say Hold, Buy more, Sell part or Sell all, with a quantity, a better stop-loss and target, and the reason. "
+            f"Use the latest information you can find (Google Search / web browsing) about THESE companies only: recent results and profit trend, broker and institutional views, "
+            f"company news, and government policy or global events that directly affect them. Also point out if any one holding is too large a share of the list, "
+            f"losers that are down for a reason that has not changed, and winners worth protecting with a higher stop-loss. Be balanced and include the bear case. "
+            f"Never promise returns. This is not SEBI-registered investment advice.\n\n"
+            f"My holdings:\n{head}\n" + "\n".join(lines) + f"\n\n{_REVIEW_FORMAT}")
 
 def parse_review(text):
     """Pasted portfolio-review reply -> list of action dicts (maybe empty), or None if no JSON list was found."""

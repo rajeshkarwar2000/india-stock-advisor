@@ -25,6 +25,10 @@ with st.sidebar:
         auto_on = st.toggle("Auto-refresh prices", True, help="A countdown at the top shows the time left. It pauses while a buy/sell window is open.")
         every = st.select_slider("Refresh every", options=[15, 30, 60, 120, 300], value=60,
                                  format_func=lambda s: f"{s} sec" if s < 60 else f"{s // 60} min")
+    with st.expander("💼 Portfolio refresh", expanded=True):
+        pf_auto = st.toggle("Auto-refresh my portfolio", True, help="Separate from the market-wide refresh above: only your holdings' prices.")
+        pf_every = st.select_slider("Portfolio refresh every", options=[10, 15, 30, 60, 120], value=30,
+                                    format_func=lambda s: f"{s} sec" if s < 60 else f"{s // 60} min")
     with st.expander("💡 Ideas"):
         topn = st.slider("How many ideas per list", 3, 15, 8)
         uni = st.selectbox("Stock universe", list(E.UNIVERSES), help="Search any other company in Explore > Search & watchlist.")
@@ -98,9 +102,7 @@ def load_extra(symbols):
             except Exception: pass
     return pd.DataFrame(out)
 
-@st.cache_data(ttl=20, show_spinner=False)
-def live_prices(symbols):
-    """Latest traded price for each symbol (cached 20 s; the Refresh button clears it)."""
+def _live_fetch(symbols):
     if not symbols: return {}
     try:
         d = yf.download([s + ".NS" for s in symbols], period="1d", interval="1m" if len(symbols) <= 40 else "5m",
@@ -112,6 +114,11 @@ def live_prices(symbols):
         return {}
 
 @st.cache_data(ttl=20, show_spinner=False)
+def live_prices(symbols):
+    """Latest traded price for each symbol (cached 20 s; the top Refresh button clears it)."""
+    return _live_fetch(symbols)
+
+@st.cache_data(ttl=20, show_spinner=False)
 def index_quotes():
     try: d = yf.download(["^NSEI", "^BSESN"], period="5d", auto_adjust=True, progress=False)["Close"].ffill()
     except Exception: return {}
@@ -121,8 +128,16 @@ def index_quotes():
             s = d[v].dropna(); out[k] = (float(s.iloc[-1]), float(s.iloc[-1] / s.iloc[-2] - 1) * 100)
     return out
 
+@st.cache_data(ttl=20, show_spinner=False)
+def pf_prices(symbols):
+    """Prices for your holdings only: its own cache, so the Portfolio refresh never touches the market-wide one."""
+    return _live_fetch(symbols), now_ist().strftime("%H:%M:%S")
+
 def refresh_now():
     live_prices.clear(); index_quotes.clear()
+
+def refresh_portfolio():
+    pf_prices.clear()
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_stocks(q):
@@ -179,7 +194,7 @@ def market_snapshot():
 
 # ---------- account helpers ----------
 def get_pos():
-    """Open positions with any stop-loss / target edits you made later (Portfolio > AI review)."""
+    """Open positions with any stop-loss / target edits you made later (Portfolio > Gemini review)."""
     pos, realised = E.positions(acct["trades"])
     for s, lv in acct.get("levels", {}).items():
         if s in pos:
@@ -210,8 +225,10 @@ FA = {**Fh, **F}                                       # fundamentals for ideas 
 tops = {k: list(m.dropna(subset=[k + "2"]).sort_values(k + "2", ascending=False).head(topn).index) for k in ("short", "mid", "long")}
 
 # ---------- live prices ----------
-need = [s for s in dict.fromkeys(held + acct.get("watch", []) + order_syms + rec_syms + sum(tops.values(), [])) if s in close_all.columns]
+need = [s for s in dict.fromkeys(acct.get("watch", []) + order_syms + rec_syms + sum(tops.values(), [])) if s in close_all.columns]
 live = dict(live_prices(tuple(need)))
+_pf_live, PF_STAMP = pf_prices(tuple(s for s in held if s in close_all.columns))
+live.update(_pf_live)
 mo = E.market_open(now_ist())
 def px(s):
     if s in live: return float(live[s])
@@ -615,7 +632,8 @@ def search_view():
                 if b2.button("Analyze", key=f"wa_{i}", use_container_width=True): st.session_state["find"] = s; st.rerun()
                 if b3.button("Remove", key=f"wr_{i}", use_container_width=True): acct["watch"].remove(s); save(); st.rerun()
 
-t_ex, t_pf, t_ai, t_tools = st.tabs(["🔎 Explore", "💼 Portfolio", "🤖 Gemini AI", "🛠 Tools"])
+with st.container(key="mainnav"):      # the main ribbon: styled as iPhone-style pills (see ui.GROWW_CSS)
+    t_ex, t_pf, t_ai, t_tools = st.tabs(["🔎 Explore", "💼 Portfolio", "🤖 Gemini ideas", "🛠 Tools"])
 with t_ex:
     e1, e6, e12, e_scan, e_find = st.tabs(["1 Month", "6 Months", "1 Year", "🚀 Scan all stocks", "🔍 Search & watchlist"])
     with e1: show_ideas("short", "i1m", 1, 10, "Short-term momentum ideas for about 1 month.")
@@ -762,10 +780,10 @@ def review_view():
                     f'<div class="gw-right">{U.pnl_html(r["pnl"], r["pnl_pct"])}<div class="gw-sub">{r["weight"]:.0f}% of holdings</div></div></div></div>', unsafe_allow_html=True)
     big = [r for r in rows if r["weight"] > 35 and len(rows) > 1]
     if big: st.warning("Concentration: " + ", ".join(f"{r['symbol']} is {r['weight']:.0f}%" for r in big) + " of your holdings. Consider spreading the risk.")
-    st.caption("Rules of thumb from trend, stop-loss and target. Open the Holdings tab to buy or sell.")
+    st.caption("Rules of thumb from trend, stop-loss and target. Open Portfolio > Holdings to buy or sell.")
     st.divider(); st.markdown("#### 2 · Review with Gemini (copy & paste, no key)")
-    notes = acct.get("notes", "")
-    prompt = E.build_review_prompt(rows, perf, dt.date.today(), notes, build_context())
+    st.caption("The prompt contains only your holdings. Gemini is told not to mention any other stock, market outlook or new ideas.")
+    prompt = E.build_review_prompt(rows, perf, dt.date.today())
     copy_open_gemini(prompt)
     with st.expander("Show prompt text"): st.code(prompt, language=None)
     reply = st.text_area("Paste Gemini's reply here", height=140, key="rv_paste", placeholder="Paste the JSON reply from Gemini…")
@@ -778,7 +796,9 @@ def review_view():
         else: st.warning("The reply had no usable actions.")
     rv = acct.get("review")
     if rv:
-        rec_cards(rv["items"], "rv", f"Gemini review pasted {rv['ts']} · AI opinion, can be wrong, not SEBI-registered advice")
+        mine = [a for a in rv["items"] if (alias.get(a["symbol"]) or a["symbol"]) in pos or a["symbol"] in pos]
+        if len(mine) < len(rv["items"]): st.caption(f"{len(rv['items']) - len(mine)} suggestion(s) about stocks you don't hold were hidden.")
+        rec_cards(mine, "rv", f"Gemini review pasted {rv['ts']} · AI opinion, can be wrong, not SEBI-registered advice")
         if st.button("Clear review", key="rv_clear"): acct.pop("review", None); save(); st.rerun()
     st.divider(); st.markdown("#### 3 · Review with Gemini (API key)")
     if st.button("⚡ Review my portfolio now", use_container_width=True, key="rv_api"):
@@ -786,7 +806,7 @@ def review_view():
         else:
             with st.spinner("Gemini is reviewing your portfolio…"):
                 try:
-                    ans = G.ask(gkey, gmodel.strip(), [dict(role="user", text=prompt)], "", gsearch, system=E.SYSTEM_RULES)
+                    ans = G.ask(gkey, gmodel.strip(), [dict(role="user", text=prompt)], "", gsearch, system=E.REVIEW_SYSTEM)
                     items = E.parse_review(ans)
                     if items: acct["review"] = dict(ts=now_ist().strftime("%d %b %Y %H:%M"), items=items); save(); st.rerun()
                     else: st.session_state["rv_text"] = ans
@@ -806,10 +826,11 @@ def account_view():
                "On free cloud hosting, saved accounts may reset when the app restarts, so export a backup.")
 
 with t_pf:
-    h1, h2 = st.columns([5, 1.4], vertical_alignment="center")
-    with h1: components.html(U.countdown_html(every if auto_on else 0, NONCE, False), height=36)
-    h2.button("🔄 Refresh", key="pf_refresh", on_click=refresh_now, use_container_width=True)
-    p_h, p_o, p_p, p_g, p_r, p_a = st.tabs(["Holdings", "Orders", "P&L report", "Growth", "AI review", "Account"])
+    h0, h1, h2 = st.columns([3, 4, 1.6], vertical_alignment="center")
+    h0.markdown(f'<div class="gw-live"><span class="gw-sub">Portfolio prices updated <b>{U.esc(PF_STAMP)} IST</b></span></div>', unsafe_allow_html=True)
+    with h1: components.html(U.countdown_html(pf_every if pf_auto else 0, NONCE, True, "Portfolio refresh in", "pf_refresh"), height=36)
+    h2.button("🔄 Refresh portfolio", key="pf_refresh", on_click=refresh_portfolio, use_container_width=True)
+    p_h, p_o, p_p, p_g, p_r, p_a = st.tabs(["Holdings", "Orders", "P&L report", "Growth", "Gemini review", "Account"])
     with p_h: holdings_view()
     with p_o: orders_view()
     with p_p: pnl_view()
@@ -825,7 +846,7 @@ with t_ai:
     with ta:
         st.write("**1.** Build a prompt  **2.** Copy it and open Gemini  **3.** Paste Gemini's reply below to get recommendations here.")
         st.caption("The prompt tells Gemini to use broker and institutional views, global news and technology shifts, government policy, and company results, and lets it pick **any** NSE/BSE company. "
-                   "To review your own holdings use **Portfolio > AI review**.")
+                   "To review your own holdings use **Portfolio > Gemini review**.")
         kind = st.radio("What do you want to ask?", E.IDEA_KINDS)
         own = st.text_input("Your question") if kind == E.PROMPT_KINDS[3] else ""
         notes = st.text_area("Optional: your own notes on news, policy or events to include", acct.get("notes", ""), height=90,
@@ -939,5 +960,5 @@ with t_tools:
 - **Buy** opens an order window: Delivery or Intraday, Market or Limit, quantity, horizon, optional stop-loss and target.
 - **Portfolio** shows cards with your buy price next to the current price, returns in ₹ and %, and today's move. Prices refresh by themselves; the countdown at the top shows the time left.
 - **P&L report** lists every closed trade. Realised + unrealised always equals net worth minus starting cash.
-- **AI review** gives an instant rule-based check and a separate Gemini prompt for your holdings.
+- **Portfolio > Gemini review** checks your holdings only: an instant rule-based check and a separate Gemini prompt that covers nothing but your holdings. **Refresh portfolio** (and its own timer) updates only your holdings.
 - Everything is practice money. Nobody can guarantee returns. Not SEBI-registered investment advice.""")
