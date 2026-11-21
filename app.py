@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 import streamlit.components.v1 as components
 
-FILES_VERSION = 15     # engine.py and ui.py must carry the same number
+FILES_VERSION = 19     # engine.py and ui.py must carry the same number
 
 def _files_ok():
     try:
@@ -41,7 +41,8 @@ now_ist = lambda: dt.datetime.now(IST)
 NONCE = f"{time.time():.3f}"
 HZ = {"1M": "1 Month", "6M": "6 Months", "1Y": "1 Year"}
 KIND_HZ = E.HORIZON_TAGS                      # short -> 1M, mid -> 6M, long -> 1Y
-st.markdown('<div class="gw-title">📈 India Stock Advisor<span>Practice account with virtual money. Ideas are research aids, not guarantees or SEBI-registered advice.</span></div>', unsafe_allow_html=True)
+TITLE = '<div class="gw-title">📈 India Stock Advisor<span>Practice account with virtual money. Ideas are research aids, not guarantees or SEBI-registered advice.</span></div>'
+_head = st.container(key="headbar")      # filled in below: title on the left, ⚙️ on the right
 
 user = re.sub(r"[^a-z0-9_-]", "", str(st.session_state.get("user_name", "me")).lower()) or "me"
 
@@ -60,6 +61,39 @@ def flash(msg): st.session_state.setdefault("flash", []).append(msg)
 def show_dialog(name, *args):
     """Open a buy / sell / settings window. Queued, then opened on a full rerun, so it also works from inside a live fragment."""
     st.session_state["pending_dlg"] = (name, args); st.rerun(scope="app")
+
+# ---------- a copy of the account is also kept in this device's browser, so an app update or reboot never wipes it ----------
+_BK_KEYS = ("start_cash", "trades", "orders", "levels", "watch", "alias", "recs", "review", "notes", "settings", "theme", "blur", "fs", "hc", "anim")
+_bk_key = f"isa_acct_{user}"
+def _valid_acct(d):
+    return (isinstance(d, dict) and isinstance(d.get("trades"), list) and isinstance(d.get("start_cash"), (int, float))
+            and all(isinstance(t, dict) and {"symbol", "side", "qty", "price", "ts"} <= set(t) for t in d["trades"]))
+if not acct.get("trades") and not st.session_state.get("isa_restore_done"):
+    with st.container(key="isa_restore"):
+        _rv = st.text_area("restore", key="isa_restore_box", label_visibility="collapsed")
+    components.html("<script>(function(){const KEY=" + json.dumps(_bk_key) + ";let n=0;const t=setInterval(()=>{try{const p=window.parent,d=p.document,"
+                    "ta=d.querySelector('.st-key-isa_restore textarea');if(ta){clearInterval(t);const v=p.localStorage.getItem(KEY)||'NONE';"
+                    "Object.getOwnPropertyDescriptor(p.HTMLTextAreaElement.prototype,'value').set.call(ta,v);"
+                    "ta.dispatchEvent(new p.Event('input',{bubbles:true}));ta.dispatchEvent(new p.FocusEvent('focusout',{bubbles:true}));}"
+                    "else if(++n>40)clearInterval(t);}catch(e){clearInterval(t)}},250)})();</script>", height=0)
+    if _rv:
+        st.session_state["isa_restore_done"] = True
+        if _rv != "NONE":
+            try:
+                _d = json.loads(_rv)
+                if _valid_acct(_d) and _d["trades"]:
+                    acct.clear(); acct.update({k: _d[k] for k in _BK_KEYS if k in _d}); save(); flash("♻️ Restored your portfolio from this device")
+            except Exception:
+                pass
+        st.rerun()
+
+def browser_backup():
+    """Write the account into this browser's storage (skipped while the account is empty, so a fresh start can't overwrite a good copy)."""
+    if st.session_state.pop("clear_backup", False): act = "L.removeItem(" + json.dumps(_bk_key) + ")"
+    elif acct.get("trades") or acct.get("orders"):
+        act = "L.setItem(" + json.dumps(_bk_key) + "," + json.dumps(json.dumps({k: acct[k] for k in _BK_KEYS if k in acct})) + ")"
+    else: return
+    components.html("<script>try{const L=window.parent.localStorage;" + act.replace("</", "<\\/") + "}catch(e){}</script>", height=0)
 
 from contextlib import contextmanager
 @contextmanager
@@ -481,11 +515,14 @@ def index_bar():
     if iq.get("Nifty 50") and iq["Nifty 50"][1] <= -1.0:
         st.warning(f"The market is down {iq['Nifty 50'][1]:.1f}% (Nifty). New buys are riskier on days like this, so consider waiting and keep your stop-losses on.")
 st.fragment(run_every=(every if auto_on else None))(index_bar)()
+with _head:
+    _h1, _h2 = st.columns([6, 1], vertical_alignment="center")
+    _h1.markdown(TITLE, unsafe_allow_html=True)
+    if _h2.button("⚙️", key="open_settings", help="Settings"): show_dialog("settings")
 with st.container(key="topbar"):
-    _l2, _l3, _l4 = st.columns([6, 1, 1], vertical_alignment="center")
+    _l2, _l3 = st.columns([6, 1], vertical_alignment="center")
     with _l2: components.html(U.countdown_html(every if auto_on else 0, "gw-stamp-mk", "Market refresh in"), height=34)
     _l3.button("🔄", key="live_refresh", on_click=refresh_now, help="Refresh market prices now")
-    if _l4.button("⚙️", key="open_settings", help="Settings"): show_dialog("settings")
 
 # ---------- Buy window (like Groww: product, order type, quantity, price) ----------
 @st.dialog("Buy")
@@ -772,7 +809,9 @@ def holdings_view():
     with st.container(key="pfhero"):
         hc1, hc2 = st.columns([3, 1], vertical_alignment="center")
         hc1.markdown(U.summary_html(perf, day_total, day_total_pct, len(rows), PF_STAMP, plain=True, part="top"), unsafe_allow_html=True)
-        with hc2: components.html(U.dial_html(pf_every if pf_auto else 0, "gw-stamp-pf", "pf_refresh"), height=50)
+        with hc2:
+            st.markdown(U.summary_html(perf, day_total, day_total_pct, len(rows), PF_STAMP, plain=True, part="stamp"), unsafe_allow_html=True)
+            components.html(U.dial_html(pf_every if pf_auto else 0, "gw-stamp-pf", "pf_refresh"), height=52)
         st.markdown(U.summary_html(perf, day_total, day_total_pct, len(rows), PF_STAMP, plain=True, part="rest"), unsafe_allow_html=True)
         st.button("🔄", key="pf_refresh", on_click=refresh_portfolio)      # pressed by the dial; hidden by CSS
     if not rows:
@@ -948,7 +987,7 @@ def review_view():
         if st.session_state.get("rv_text"): st.markdown(st.session_state["rv_text"])
 
 def account_view():
-    with box("💾 Backup & restore", "a1"):
+    with box("💾 Backup & restore", "a1", "A copy is also kept in this device's browser and restored automatically after an app update"):
         st.download_button("⬇️ Export account (backup)", json.dumps(acct), f"{user}_demo_account.json", use_container_width=True)
         up = st.file_uploader("Import a backup", type="json")
         if up and st.button("Restore backup"): acct.clear(); acct.update(json.load(up)); save(); st.rerun()
@@ -956,7 +995,8 @@ def account_view():
         new_cash = st.number_input("Reset with starting cash (₹)", 10000, 100000000, int(acct["start_cash"]), step=50000)
         if st.button("⚠️ Reset account"):
             keep = {k: acct[k] for k in ("theme", "blur", "fs", "hc", "anim", "settings") if k in acct}
-            acct.clear(); acct.update(start_cash=float(new_cash), trades=[], **keep); save(); st.rerun()
+            acct.clear(); acct.update(start_cash=float(new_cash), trades=[], **keep); save()
+            st.session_state["clear_backup"] = True; st.session_state["isa_restore_done"] = True; st.rerun()
     st.caption("Demo only: virtual money, no brokerage, taxes or slippage. Market orders fill at the latest available price (can be a few minutes delayed). "
                "Limit orders and stop-loss / target sells are checked whenever the app is open. Intraday positions are squared off at 3:20 PM. "
                "On free cloud hosting, saved accounts may reset when the app restarts, so export a backup.")
@@ -1110,3 +1150,5 @@ with t_tools:
 - **P&L report** lists every closed trade. Realised + unrealised always equals net worth minus starting cash.
 - **Portfolio > Gemini review** checks your holdings only: an instant rule-based check and a separate Gemini prompt that covers nothing but your holdings. **Refresh portfolio** (and its own timer) updates only your holdings.
 - Everything is practice money. Nobody can guarantee returns. Not SEBI-registered investment advice.""")
+
+browser_backup()

@@ -3,7 +3,7 @@
 Everything here returns plain strings (no Streamlit import) so it can be unit-tested.
 HTML is built on one line: Streamlit's markdown turns indented lines into code blocks.
 """
-FILES_VERSION = 15
+FILES_VERSION = 19
 import html as _h
 import json as _json
 
@@ -106,7 +106,7 @@ def live_bar_html(is_open, idx, stamp):
 
 def summary_html(perf, day, day_pct, n_hold, stamp="", plain=False, part="all"):
     """Portfolio hero (current value, returns, 1-day returns, invested, realised, cash).
-    plain=True: no frame of its own. part: "top" = title + big value, "rest" = stats + update time, "all" = both."""
+    plain=True: no frame of its own. part: "top" = title + big value, "rest" = the stats, "stamp" = the small update time, "all" = everything."""
     big = f'<div class="gw-big">{esc(inr(perf["current"], 2))}</div>'
     grid = (_kv("Invested", esc(inr(perf["invested"])))
             + _kv("Total returns", pnl_html(perf["unrealised"], perf["unrealised_pct"]))
@@ -116,8 +116,9 @@ def summary_html(perf, day, day_pct, n_hold, stamp="", plain=False, part="all"):
             + _kv("Net worth", f'{esc(inr(perf["net"]))} {pct_html(perf["total_pct"])}'))
     st_ = f'<div class="gw-sub gw-stamp-pf">Updated {esc(stamp)}</div>' if stamp else ""
     top = f'<div class="gw-k">Current value · {n_hold} holding{"s" if n_hold != 1 else ""}</div>{big}'
-    rest = f'<div class="gw-grid gw-grid-hero">{grid}</div>{st_}'
-    inner = {"top": top, "rest": rest}.get(part, top + rest)
+    rest = f'<div class="gw-grid gw-grid-hero">{grid}</div>'
+    stamp_html = f'<div class="gw-sub gw-stamp-pf" style="text-align:right;white-space:nowrap;font-size:.7rem;margin-bottom:2px">Updated {esc(stamp)}</div>' if stamp else ""
+    inner = {"top": top, "rest": rest, "stamp": stamp_html}.get(part, top + rest + st_)
     return inner if (plain or part != "all") else f'<div class="gw-card gw-hero">{inner}</div>'
 
 
@@ -172,7 +173,7 @@ def countdown_html(seconds, stamp_class, label="Next refresh in"):
     whenever the watched stamp text (class `stamp_class`) changes, so it stays in step with the data."""
     if not seconds:
         return '<div style="font:600 13px system-ui,sans-serif;color:#8a8fa3;padding:6px 0">Auto-refresh is off. Tap the refresh button.</div>'
-    return f"""<div style="font:600 13px system-ui,sans-serif;color:#6b7083;display:flex;align-items:center;gap:10px;padding:6px 0">
+    return f"""<style>body{{margin:0;overflow:hidden}}</style><div style="font:600 13px system-ui,sans-serif;color:#6b7083;display:flex;align-items:center;gap:10px;padding:6px 0">
 <span style="width:9px;height:9px;border-radius:50%;background:{UP};flex:none"></span>
 <span id="t" style="white-space:nowrap">{esc(label)} {int(seconds)}s</span>
 <div style="flex:1;height:5px;background:#e3e5ea;border-radius:5px;overflow:hidden"><div id="b" style="height:5px;width:100%;background:{UP}"></div></div></div>
@@ -189,7 +190,7 @@ def dial_html(seconds, stamp_class, target, compact=True):
     hidden Refresh button whose key is `target`; the icon spins until fresh data arrives. The countdown restarts when
     the watched stamp text changes."""
     C = 238.76
-    return f"""<style>@keyframes sp{{to{{transform:rotate(360deg)}}}} .spin{{animation:sp .8s linear infinite}}</style>
+    return f"""<style>body{{margin:0;overflow:hidden}} @keyframes sp{{to{{transform:rotate(360deg)}}}} .spin{{animation:sp .8s linear infinite}}</style>
 <div id="w" style="display:flex;align-items:center;justify-content:flex-end;gap:6px;font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent;user-select:none">
 <svg width="46" height="46" viewBox="0 0 92 92" style="cursor:pointer"><circle cx="46" cy="46" r="38" fill="none" stroke="#e3e5ea" stroke-width="9"/>
 <circle id="r" cx="46" cy="46" r="38" fill="none" stroke="{UP}" stroke-width="9" stroke-linecap="round" stroke-dasharray="{C}" stroke-dashoffset="0" transform="rotate(-90 46 46)"/>
@@ -254,10 +255,13 @@ header[data-testid="stHeader"]{{height:2.4rem!important;min-height:0!important;b
 .st-key-pfhero{{background:linear-gradient(135deg,{UP}14,{BLUE}10)!important;border:1px solid {UP}33!important;border-radius:14px!important;padding:6px 10px!important}}
 .st-key-pfhero [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:4px!important;align-items:center!important}}
 .st-key-pfhero [data-testid="stColumn"],.st-key-pfhero [data-testid="column"]{{min-width:0!important}}
-.st-key-pfhero [data-testid="stColumn"]:not(:first-child),.st-key-pfhero [data-testid="column"]:not(:first-child){{flex:0 0 96px!important;width:96px!important}}
+.st-key-pfhero [data-testid="stColumn"]:not(:first-child),.st-key-pfhero [data-testid="column"]:not(:first-child){{flex:0 0 112px!important;width:112px!important}}
 .gw-grid-hero{{grid-template-columns:repeat(auto-fit,minmax(104px,1fr))}}
 .st-key-pf_refresh{{display:none!important}}
 [data-stale="true"],.stale-element{{opacity:1!important;transition:none!important}}
+.st-key-open_settings button{{width:46px!important;min-height:46px!important;padding:0!important;border-radius:50%!important;line-height:1!important}}
+.st-key-open_settings button p{{font-size:1.65rem!important;line-height:1!important;margin:0!important}}
+.st-key-isa_restore{{position:absolute!important;left:-9999px!important;height:0!important;overflow:hidden!important}}
 [data-testid="stBaseButton-pills"],[data-testid="stBaseButton-segmented_control"]{{border-radius:999px!important}}
 [data-testid="stBaseButton-pillsActive"],[data-testid="stBaseButton-segmented_controlActive"]{{border-radius:999px!important;background:{UP}1f!important;border-color:{UP}!important;color:{UP}!important;font-weight:700!important}}
 [data-testid="stBaseButton-pillsActive"] *,[data-testid="stBaseButton-segmented_controlActive"] *{{color:{UP}!important}}
@@ -265,8 +269,9 @@ header[data-testid="stHeader"]{{height:2.4rem!important;min-height:0!important;b
 [class*="st-key-card_box"]{{background:rgba(120,124,140,.07)!important;border-left:4px solid {UP}!important}}
 .gw-boxh{{font-size:1.02rem;font-weight:700;margin-bottom:6px}} .gw-boxh span{{display:block;font-size:.76rem;font-weight:400;opacity:.65;margin-top:1px}}
 .gw-title{{font-size:1.2rem;font-weight:700;line-height:1.2;margin-bottom:2px}} .gw-title span{{display:block;font-size:.72rem;font-weight:400;opacity:.62;margin-top:2px}}
-.st-key-topbar [data-testid="stHorizontalBlock"],.st-key-pfbar [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:6px!important;align-items:center!important}}
-.st-key-topbar [data-testid="stColumn"],.st-key-pfbar [data-testid="stColumn"],.st-key-topbar [data-testid="column"],.st-key-pfbar [data-testid="column"]{{min-width:0!important}}
+.st-key-headbar [data-testid="stHorizontalBlock"],.st-key-topbar [data-testid="stHorizontalBlock"],.st-key-pfbar [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:6px!important;align-items:center!important}}
+.st-key-headbar [data-testid="stColumn"],.st-key-topbar [data-testid="stColumn"],.st-key-pfbar [data-testid="stColumn"],.st-key-topbar [data-testid="column"],.st-key-pfbar [data-testid="column"]{{min-width:0!important}}
+.st-key-headbar [data-testid="stColumn"]:not(:first-child){{flex:0 0 52px!important;width:52px!important}}
 .st-key-topbar [data-testid="stColumn"]:not(:first-child),.st-key-pfbar [data-testid="stColumn"]:not(:first-child),.st-key-topbar [data-testid="column"]:not(:first-child),.st-key-pfbar [data-testid="column"]:not(:first-child){{flex:0 0 auto!important;width:auto!important}}
-.st-key-live_refresh button,.st-key-pf_refresh button,.st-key-open_settings button{{border-radius:999px!important;padding:2px 12px!important;min-height:2.2rem!important}}
+.st-key-live_refresh button,.st-key-pf_refresh button{{border-radius:999px!important;padding:2px 12px!important;min-height:2.2rem!important}}
 </style>"""

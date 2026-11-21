@@ -1,6 +1,6 @@
 """Scoring, strategy and backtest logic (pandas/numpy only)."""
 import datetime as _dt
-FILES_VERSION = 15
+FILES_VERSION = 19
 import numpy as np, pandas as pd
 from math import erf, sqrt, log
 
