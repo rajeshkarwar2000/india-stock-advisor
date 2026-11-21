@@ -1,4 +1,5 @@
-import json, time
+import json, os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import cloudstore as C
 
 
@@ -50,7 +51,7 @@ def test_finds_existing_gist_after_a_restart():
 
 
 def test_sync_async_uploads_once_and_reports_errors():
-    gh = _fresh()
+    _fresh()
     assert C.sync_async("tok", "me", "{\"x\":1}", min_gap=0)
     for _ in range(50):
         if C.STATUS.get("me"): break
