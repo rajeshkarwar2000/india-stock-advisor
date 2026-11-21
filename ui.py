@@ -3,7 +3,7 @@
 Everything here returns plain strings (no Streamlit import) so it can be unit-tested.
 HTML is built on one line: Streamlit's markdown turns indented lines into code blocks.
 """
-FILES_VERSION = 22
+FILES_VERSION = 23
 import html as _h
 import json as _json
 
@@ -239,7 +239,7 @@ GROWW_CSS = f"""<style>
 .st-key-exec_sell button p{{color:#fff!important}}
 .st-key-exec_buy button{{background:{UP}!important;border:0!important}}
 .st-key-exec_buy button p{{color:#fff!important}}
-[role="tablist"]{{position:sticky;top:2.6rem;z-index:99;background:rgba(255,255,255,.42)!important;backdrop-filter:blur(22px) saturate(190%)!important;-webkit-backdrop-filter:blur(22px) saturate(190%)!important;border:1px solid rgba(255,255,255,.85)!important;border-radius:999px!important;padding:4px!important;gap:2px!important;box-shadow:inset 0 1.5px 1px rgba(255,255,255,.95),inset 0 -1.5px 2px rgba(0,0,0,.06),0 8px 22px rgba(40,60,110,.16)!important}}
+[role="tablist"]{{position:sticky;top:2.6rem;z-index:99;background:rgba(255,255,255,.93)!important;backdrop-filter:blur(22px) saturate(190%)!important;-webkit-backdrop-filter:blur(22px) saturate(190%)!important;border:1px solid rgba(255,255,255,.85)!important;border-radius:999px!important;padding:4px!important;gap:2px!important;box-shadow:inset 0 1.5px 1px rgba(255,255,255,.95),inset 0 -1.5px 2px rgba(0,0,0,.06),0 8px 22px rgba(40,60,110,.16)!important}}
 [role="tablist"] button,[role="tablist"] [role="tab"]{{flex:1 1 auto;justify-content:center;white-space:nowrap;border-radius:999px!important;padding:8px 8px!important;background:transparent!important;border:1.5px solid transparent!important;box-shadow:none!important;height:auto!important}}
 [role="tablist"] button *,[role="tablist"] [role="tab"] *{{color:#5f6270!important;font-weight:600!important;font-size:.9rem!important;white-space:nowrap}}
 [role="tablist"] [aria-selected="true"]{{background:rgba(110,115,130,.22)!important;border:1.5px solid transparent!important;box-shadow:inset 0 1.5px 2px rgba(255,255,255,.75),inset 0 -1px 4px rgba(0,0,0,.10)!important}}

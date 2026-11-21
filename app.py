@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 import streamlit.components.v1 as components
 
-FILES_VERSION = 22     # engine.py and ui.py must carry the same number
+FILES_VERSION = 23     # engine.py and ui.py must carry the same number
 
 def _files_ok():
     try:
@@ -137,7 +137,7 @@ def cloud_status_view():
     """One status line (and the one-time setup steps) for the cloud copy."""
     s = (CS.STATUS.get(user) if CS else None) or {}
     if CS and CLOUD_TOKEN:
-        if s.get("ok"): st.success(f"☁️ Cloud copy saved at {time.strftime('%H:%M:%S', time.localtime(s['ts']))}. It survives app updates and reboots.")
+        if s.get("ok"): st.success(f"☁️ Cloud copy saved at {dt.datetime.fromtimestamp(s['ts'], IST).strftime('%H:%M:%S')}. It survives app updates and reboots.")
         elif s: st.warning(f"☁️ Cloud copy problem: {s.get('msg', '')}. Check that the GITHUB_TOKEN in Streamlit secrets has the gist permission.")
         else: st.info("☁️ Cloud copy is on. It is saved a few seconds after each change.")
     else:
