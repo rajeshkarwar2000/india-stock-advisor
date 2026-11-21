@@ -60,3 +60,7 @@ Results are cached in scan_cache/ so reopening is instant; re-run for fresh pric
 - **Portfolio review (Gemini):** its own tab: instant rule-based check, a separate Gemini prompt for your holdings (copy & paste, or API key) and action buttons for the reply.
 - **Scan all stocks:** every NSE-listed company (~2,000+), with progress and time left; rank by 1M / 6M / 1Y. If NSE's list won't download, upload EQUITY_L.csv.
 - Needs Streamlit 1.40 or newer (buy/sell windows).
+
+- **Automatic saving on your device:** the account is saved in this device's browser after every change and restored by itself after an app update or reboot (needs no action; the Export button is an extra backup). It is tied to this browser/app and the same app address; clearing the app's data removes it.
+
+- **Cloud copy (optional, one-time setup):** Streamlit wipes its disk on every update, so the account can also be saved in a private (secret) GitHub Gist. Create a GitHub token (classic) with only the **gist** permission and add `GITHUB_TOKEN = "ghp_..."` in Streamlit > Manage app > Settings > Secrets. After that every change is uploaded in the background, and an empty account is refilled from the cloud copy on start. Never put the token in the repo.

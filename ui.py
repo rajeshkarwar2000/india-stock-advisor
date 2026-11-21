@@ -3,7 +3,7 @@
 Everything here returns plain strings (no Streamlit import) so it can be unit-tested.
 HTML is built on one line: Streamlit's markdown turns indented lines into code blocks.
 """
-FILES_VERSION = 19
+FILES_VERSION = 22
 import html as _h
 import json as _json
 

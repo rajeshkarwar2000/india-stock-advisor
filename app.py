@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 import streamlit.components.v1 as components
 
-FILES_VERSION = 19     # engine.py and ui.py must carry the same number
+FILES_VERSION = 22     # engine.py and ui.py must carry the same number
 
 def _files_ok():
     try:
@@ -21,12 +21,15 @@ if not _files_ok():
             try:
                 with zipfile.ZipFile(_zp) as _z:
                     for _n in _z.namelist():
-                        if os.path.basename(_n) in ("engine.py", "ui.py", "gemini_client.py") and "/android/" not in _n and "/tests/" not in _n:
+                        if os.path.basename(_n) in ("engine.py", "ui.py", "gemini_client.py", "cloudstore.py") and "/android/" not in _n and "/tests/" not in _n:
                             with open(os.path.join(_here, os.path.basename(_n)), "wb") as _f: _f.write(_z.read(_n))
+                        elif _n.endswith("frontend/index.html"):
+                            os.makedirs(os.path.join(_here, "frontend"), exist_ok=True)
+                            with open(os.path.join(_here, "frontend", "index.html"), "wb") as _f: _f.write(_z.read(_n))
             except Exception:
                 pass
             break
-    for _m in ("engine", "ui", "gemini_client"): sys.modules.pop(_m, None)
+    for _m in ("engine", "ui", "gemini_client", "cloudstore"): sys.modules.pop(_m, None)
     if not _files_ok():
         st.error("Some app files are older than app.py (engine.py or ui.py). Upload the newest india-stock-advisor.zip to the repo root "
                  "(replace the old one), wait for the GitHub Action to finish, then reboot the app.")
@@ -34,6 +37,10 @@ if not _files_ok():
 import engine as E
 import gemini_client as G
 import ui as U
+try:
+    import cloudstore as CS
+except Exception:
+    CS = None
 
 st.set_page_config(page_title="India Stock Advisor", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 IST = ZoneInfo("Asia/Kolkata")
@@ -68,31 +75,90 @@ _bk_key = f"isa_acct_{user}"
 def _valid_acct(d):
     return (isinstance(d, dict) and isinstance(d.get("trades"), list) and isinstance(d.get("start_cash"), (int, float))
             and all(isinstance(t, dict) and {"symbol", "side", "qty", "price", "ts"} <= set(t) for t in d["trades"]))
+try:
+    _bs = components.declare_component("isa_browser_store", path=os.path.join(os.path.dirname(os.path.abspath(globals().get("__file__", "app.py"))), "frontend"))
+except Exception:
+    _bs = None          # component folder missing: fall back to the script method below
+
+def _restore_from(text, where="this device"):
+    """Put a saved copy back (only if it looks like a real account). Returns True when something was restored."""
+    try:
+        d = json.loads(text)
+        if _valid_acct(d) and d["trades"]:
+            acct.clear(); acct.update({k: d[k] for k in _BK_KEYS if k in d}); save(); flash(f"♻️ Restored your portfolio from {where}"); return True
+    except Exception:
+        pass
+    return False
+
+try: _ct = st.secrets.get("GITHUB_TOKEN", "")
+except Exception: _ct = ""
+CLOUD_TOKEN = (_ct or os.environ.get("GITHUB_TOKEN", "")).strip()
+
+if CS and CLOUD_TOKEN and not acct.get("trades") and not st.session_state.get("isa_cloud_tried"):
+    st.session_state["isa_cloud_tried"] = True                 # once per visit: the cloud copy is the first place to look
+    try:
+        _txt = CS.load(CLOUD_TOKEN, user)
+        if _txt and _restore_from(_txt, "your cloud copy"): st.session_state["isa_restore_done"] = True; st.rerun()
+    except Exception as _e:
+        CS.STATUS[user] = dict(ts=time.time(), ok=False, msg=f"Could not read the cloud copy: {str(_e)[:140]}")
+
 if not acct.get("trades") and not st.session_state.get("isa_restore_done"):
-    with st.container(key="isa_restore"):
-        _rv = st.text_area("restore", key="isa_restore_box", label_visibility="collapsed")
-    components.html("<script>(function(){const KEY=" + json.dumps(_bk_key) + ";let n=0;const t=setInterval(()=>{try{const p=window.parent,d=p.document,"
-                    "ta=d.querySelector('.st-key-isa_restore textarea');if(ta){clearInterval(t);const v=p.localStorage.getItem(KEY)||'NONE';"
-                    "Object.getOwnPropertyDescriptor(p.HTMLTextAreaElement.prototype,'value').set.call(ta,v);"
-                    "ta.dispatchEvent(new p.Event('input',{bubbles:true}));ta.dispatchEvent(new p.FocusEvent('focusout',{bubbles:true}));}"
-                    "else if(++n>40)clearInterval(t);}catch(e){clearInterval(t)}},250)})();</script>", height=0)
-    if _rv:
-        st.session_state["isa_restore_done"] = True
-        if _rv != "NONE":
-            try:
-                _d = json.loads(_rv)
-                if _valid_acct(_d) and _d["trades"]:
-                    acct.clear(); acct.update({k: _d[k] for k in _BK_KEYS if k in _d}); save(); flash("♻️ Restored your portfolio from this device")
-            except Exception:
-                pass
-        st.rerun()
+    if _bs is not None:
+        _r = _bs(action="load", skey=_bk_key, key="isa_bs_load", default=None)
+        if _r is not None:                                   # the browser answered
+            st.session_state["isa_restore_done"] = True
+            if _r.get("found") and _r.get("data") and _restore_from(_r["data"]): st.rerun()
+    else:
+        with st.container(key="isa_restore"):
+            _rv = st.text_area("restore", key="isa_restore_box", label_visibility="collapsed")
+        components.html("<script>(function(){const KEY=" + json.dumps(_bk_key) + ";let n=0;const t=setInterval(()=>{try{const p=window.parent,d=p.document,"
+                        "ta=d.querySelector('.st-key-isa_restore textarea');if(ta){clearInterval(t);const v=p.localStorage.getItem(KEY)||'NONE';"
+                        "Object.getOwnPropertyDescriptor(p.HTMLTextAreaElement.prototype,'value').set.call(ta,v);"
+                        "ta.dispatchEvent(new p.Event('input',{bubbles:true}));ta.dispatchEvent(new p.FocusEvent('focusout',{bubbles:true}));}"
+                        "else if(++n>40)clearInterval(t);}catch(e){clearInterval(t)}},250)})();</script>", height=0)
+        if _rv:
+            st.session_state["isa_restore_done"] = True
+            if _rv != "NONE" and _restore_from(_rv): st.rerun()
+            elif _rv: st.rerun()
+
+def cloud_sync():
+    """Save the account when the app is opened (always, once per visit), and afterwards in the background whenever it changes.
+    Server file: portfolios/<name>.json. Cloud copy: the secret gist (needs the GITHUB_TOKEN secret)."""
+    reset = st.session_state.pop("cloud_reset", False)
+    has_data = bool(acct.get("trades") or acct.get("orders"))
+    opened = has_data and not st.session_state.get("isa_open_saved")
+    if opened:
+        st.session_state["isa_open_saved"] = True
+        save()                                                        # server copy, every time the app is opened
+    if not (CS and CLOUD_TOKEN) or not (reset or has_data): return
+    CS.sync_async(CLOUD_TOKEN, user, json.dumps({k: acct[k] for k in _BK_KEYS if k in acct}), force=opened)
+
+def cloud_status_view():
+    """One status line (and the one-time setup steps) for the cloud copy."""
+    s = (CS.STATUS.get(user) if CS else None) or {}
+    if CS and CLOUD_TOKEN:
+        if s.get("ok"): st.success(f"☁️ Cloud copy saved at {time.strftime('%H:%M:%S', time.localtime(s['ts']))}. It survives app updates and reboots.")
+        elif s: st.warning(f"☁️ Cloud copy problem: {s.get('msg', '')}. Check that the GITHUB_TOKEN in Streamlit secrets has the gist permission.")
+        else: st.info("☁️ Cloud copy is on. It is saved a few seconds after each change.")
+    else:
+        st.info("☁️ Cloud copy is off. The device copy still works. To also keep a copy on the cloud, add a free GitHub token (steps below).")
+        with st.expander("How to turn on the cloud copy (one time, about 3 minutes)"):
+            st.markdown("1. On github.com: profile photo > **Settings** > **Developer settings** > **Personal access tokens** > **Tokens (classic)** > **Generate new token (classic)**.\n"
+                        "2. Name it *stock advisor*, tick only **gist**, and generate. Copy the token (starts with `ghp_`).\n"
+                        "3. In Streamlit: your app > **Manage app** > **Settings** > **Secrets**, and add this line: `GITHUB_TOKEN = \"ghp_your_token_here\"`. Save.\n"
+                        "4. Reboot the app. Your account is then also saved in a private (secret) gist on your GitHub.")
 
 def browser_backup():
-    """Write the account into this browser's storage (skipped while the account is empty, so a fresh start can't overwrite a good copy)."""
-    if st.session_state.pop("clear_backup", False): act = "L.removeItem(" + json.dumps(_bk_key) + ")"
-    elif acct.get("trades") or acct.get("orders"):
-        act = "L.setItem(" + json.dumps(_bk_key) + "," + json.dumps(json.dumps({k: acct[k] for k in _BK_KEYS if k in acct})) + ")"
-    else: return
+    """Save the account into this browser's storage after every full run (skipped while the account is empty, so a fresh
+    start can never overwrite a good copy)."""
+    clear = st.session_state.pop("clear_backup", False)
+    if not clear and not (acct.get("trades") or acct.get("orders")): return
+    payload = json.dumps({k: acct[k] for k in _BK_KEYS if k in acct})
+    if _bs is not None:
+        if clear: _bs(action="clear", skey=_bk_key, key="isa_bs_save", default=None)
+        else: _bs(action="save", skey=_bk_key, payload=payload, key="isa_bs_save", default=None)
+        return
+    act = "L.removeItem(" + json.dumps(_bk_key) + ")" if clear else "L.setItem(" + json.dumps(_bk_key) + "," + json.dumps(payload) + ")"
     components.html("<script>try{const L=window.parent.localStorage;" + act.replace("</", "<\\/") + "}catch(e){}</script>", height=0)
 
 from contextlib import contextmanager
@@ -987,7 +1053,8 @@ def review_view():
         if st.session_state.get("rv_text"): st.markdown(st.session_state["rv_text"])
 
 def account_view():
-    with box("💾 Backup & restore", "a1", "A copy is also kept in this device's browser and restored automatically after an app update"):
+    with box("💾 Backup & restore", "a1", "Saved on this device and (if set up) on the cloud after every change, and restored by itself after an update."):
+        cloud_status_view()
         st.download_button("⬇️ Export account (backup)", json.dumps(acct), f"{user}_demo_account.json", use_container_width=True)
         up = st.file_uploader("Import a backup", type="json")
         if up and st.button("Restore backup"): acct.clear(); acct.update(json.load(up)); save(); st.rerun()
@@ -996,7 +1063,7 @@ def account_view():
         if st.button("⚠️ Reset account"):
             keep = {k: acct[k] for k in ("theme", "blur", "fs", "hc", "anim", "settings") if k in acct}
             acct.clear(); acct.update(start_cash=float(new_cash), trades=[], **keep); save()
-            st.session_state["clear_backup"] = True; st.session_state["isa_restore_done"] = True; st.rerun()
+            st.session_state["clear_backup"] = True; st.session_state["isa_restore_done"] = True; st.session_state["cloud_reset"] = True; st.rerun()
     st.caption("Demo only: virtual money, no brokerage, taxes or slippage. Market orders fill at the latest available price (can be a few minutes delayed). "
                "Limit orders and stop-loss / target sells are checked whenever the app is open. Intraday positions are squared off at 3:20 PM. "
                "On free cloud hosting, saved accounts may reset when the app restarts, so export a backup.")
@@ -1151,4 +1218,5 @@ with t_tools:
 - **Portfolio > Gemini review** checks your holdings only: an instant rule-based check and a separate Gemini prompt that covers nothing but your holdings. **Refresh portfolio** (and its own timer) updates only your holdings.
 - Everything is practice money. Nobody can guarantee returns. Not SEBI-registered investment advice.""")
 
+cloud_sync()
 browser_backup()

@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head><body style="margin:0">
+<script>
+/* Tiny two-way Streamlit component: keeps the account in this browser's localStorage.
+   action "load"  -> replies once with {found, data}
+   action "save"  -> writes args.payload under args.skey (no reply, so no extra rerun)
+   action "clear" -> removes args.skey */
+function send(type, data) { window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*"); }
+window.addEventListener("message", function (e) {
+  if (!e.data || e.data.type !== "streamlit:render") return;
+  var a = e.data.args || {};
+  try {
+    if (a.action === "load") {
+      var v = localStorage.getItem(a.skey);
+      send("streamlit:setComponentValue", {value: {found: v !== null, data: v}, dataType: "json"});
+    } else if (a.action === "save") {
+      if (localStorage.getItem(a.skey) !== a.payload) localStorage.setItem(a.skey, a.payload);
+    } else if (a.action === "clear") {
+      localStorage.removeItem(a.skey);
+    }
+  } catch (err) {
+    if (a.action === "load") send("streamlit:setComponentValue", {value: {found: false, data: null, error: String(err)}, dataType: "json"});
+  }
+  send("streamlit:setFrameHeight", {height: 0});
+});
+send("streamlit:componentReady", {apiVersion: 1});
+send("streamlit:setFrameHeight", {height: 0});
+</script></body></html>
