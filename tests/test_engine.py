@@ -189,6 +189,8 @@ def test_ui_helpers():
     assert U.pct(2.3456) == "+2.35%" and U.pct(float("nan")) == "–"
     assert "gw-up" in U.pnl_html(10, 1) and "gw-down" in U.pnl_html(-10, -1) and "gw-flat" in U.pnl_html(None)
     assert "<script>" not in U.chip("<script>", "buy")
-    assert "st-key-live_refresh" in U.countdown_html(30, "n") and "Auto-refresh is off" in U.countdown_html(0, "n")
+    assert "gw-stamp-mk" in U.countdown_html(30, "gw-stamp-mk") and "Auto-refresh is off" in U.countdown_html(0, "x")
+    d = U.dial_html(60, "gw-stamp-pf", "pf_refresh"); assert "st-key-pf_refresh" in d and "stroke-dashoffset" in d and "Refresh now" in d
+    assert "gw-stamp-pf" in U.summary_html(dict(current=1, invested=1, unrealised=0, unrealised_pct=0, realised=0, realised_pct=0, closed=0, cash=1, net=1, total_pct=0), 0, 0, 1, "10:00:00", plain=True)
     assert U.GROWW_CSS.count("{") == U.GROWW_CSS.count("}")
     assert "Groww Light" == E.DEFAULT_THEME

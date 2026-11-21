@@ -3,7 +3,7 @@
 Everything here returns plain strings (no Streamlit import) so it can be unit-tested.
 HTML is built on one line: Streamlit's markdown turns indented lines into code blocks.
 """
-FILES_VERSION = 11
+FILES_VERSION = 15
 import html as _h
 import json as _json
 
@@ -98,14 +98,15 @@ def _kv(label, value_html):
 
 
 def live_bar_html(is_open, idx, stamp):
-    """Market status + Nifty/Sensex ticker line."""
+    """Market status + Nifty/Sensex ticker line. The stamp text is watched by the countdown to restart it."""
     st = chip("Market open", "buy") if is_open else chip("Market closed", "muted")
     bits = "".join(f'<span class="gw-idx"><b>{esc(k)}</b> {esc(f"{v:,.2f}")} {pct_html(d)}</span>' for k, (v, d) in (idx or {}).items())
-    return f'<div class="gw-live">{st}{bits}' + (f'<span class="gw-sub">Updated {esc(stamp)}</span>' if stamp else "") + '</div>'
+    return f'<div class="gw-live">{st}{bits}<span class="gw-sub gw-stamp-mk">Updated {esc(stamp)}</span></div>'
 
 
-def summary_html(perf, day, day_pct, n_hold):
-    """Portfolio hero card (current value, returns, 1-day returns, invested, realised, cash)."""
+def summary_html(perf, day, day_pct, n_hold, stamp="", plain=False, part="all"):
+    """Portfolio hero (current value, returns, 1-day returns, invested, realised, cash).
+    plain=True: no frame of its own. part: "top" = title + big value, "rest" = stats + update time, "all" = both."""
     big = f'<div class="gw-big">{esc(inr(perf["current"], 2))}</div>'
     grid = (_kv("Invested", esc(inr(perf["invested"])))
             + _kv("Total returns", pnl_html(perf["unrealised"], perf["unrealised_pct"]))
@@ -113,8 +114,11 @@ def summary_html(perf, day, day_pct, n_hold):
             + _kv("Realised P&L", pnl_html(perf["realised"], perf["realised_pct"] if perf["closed"] else None))
             + _kv("Virtual cash", esc(inr(perf["cash"])))
             + _kv("Net worth", f'{esc(inr(perf["net"]))} {pct_html(perf["total_pct"])}'))
-    return (f'<div class="gw-card gw-hero"><div class="gw-k">Current value · {n_hold} holding{"s" if n_hold != 1 else ""}</div>{big}'
-            f'<div class="gw-grid">{grid}</div></div>')
+    st_ = f'<div class="gw-sub gw-stamp-pf">Updated {esc(stamp)}</div>' if stamp else ""
+    top = f'<div class="gw-k">Current value · {n_hold} holding{"s" if n_hold != 1 else ""}</div>{big}'
+    rest = f'<div class="gw-grid gw-grid-hero">{grid}</div>{st_}'
+    inner = {"top": top, "rest": rest}.get(part, top + rest)
+    return inner if (plain or part != "all") else f'<div class="gw-card gw-hero">{inner}</div>'
 
 
 def holding_html(h):
@@ -161,25 +165,47 @@ def order_box_html(rows):
     return '<div class="gw-box">' + "".join(_kv(k, v) for k, v in rows) + "</div>"
 
 
-def countdown_html(seconds, nonce, fire=True, label="Next refresh in", target="live_refresh"):
-    """Countdown to the next price refresh. When it reaches zero it taps the Refresh button whose key is `target`, unless a buy/sell window is open. fire=False: display only."""
+_WATCH_JS = """function stamp(){try{const e=window.parent.document.querySelector('.%s');return e?e.textContent:null}catch(x){return null}}"""
+
+def countdown_html(seconds, stamp_class, label="Next refresh in"):
+    """Display-only countdown. The real refresh is done by Streamlit (a fragment with run_every); this restarts
+    whenever the watched stamp text (class `stamp_class`) changes, so it stays in step with the data."""
     if not seconds:
-        return ('<div style="font:600 13px system-ui,sans-serif;color:#8a8fa3;padding:6px 0">'
-                'Auto-refresh is off. Use Refresh.</div><!--%s-->' % esc(nonce))
+        return '<div style="font:600 13px system-ui,sans-serif;color:#8a8fa3;padding:6px 0">Auto-refresh is off. Tap the refresh button.</div>'
     return f"""<div style="font:600 13px system-ui,sans-serif;color:#6b7083;display:flex;align-items:center;gap:10px;padding:6px 0">
-<span id="d" style="width:9px;height:9px;border-radius:50%;background:{UP};flex:none"></span>
+<span style="width:9px;height:9px;border-radius:50%;background:{UP};flex:none"></span>
 <span id="t" style="white-space:nowrap">{esc(label)} {int(seconds)}s</span>
 <div style="flex:1;height:5px;background:#e3e5ea;border-radius:5px;overflow:hidden"><div id="b" style="height:5px;width:100%;background:{UP}"></div></div></div>
-<script>
-const total={int(seconds)}, fire={_json.dumps(bool(fire))}, end=Date.now()+total*1000, T=document.getElementById('t'), B=document.getElementById('b');
-function go(){{try{{const d=window.parent.document;
- if(d.querySelector('div[role="dialog"], [data-testid="stDialog"]')){{T.textContent='Paused while an order window is open';setTimeout(go,3000);return;}}
- const b=d.querySelector('.st-key-{target} button'); if(b){{T.textContent='Refreshing…';b.click();}} else {{T.textContent='Tap Refresh'}}
-}}catch(e){{T.textContent='Tap Refresh to update'}}}}
-const iv=setInterval(()=>{{const l=Math.max(0,Math.ceil((end-Date.now())/1000));
- T.textContent={_json.dumps(label)}+' '+l+'s'; B.style.width=(l/total*100)+'%';
- if(l<=0){{clearInterval(iv); if(fire) go(); else T.textContent='Refreshing…';}}}},250);
-</script><!--{esc(nonce)}-->"""
+<script>{_WATCH_JS % stamp_class}
+const total={int(seconds)}; let end=Date.now()+total*1000, last=null; const T=document.getElementById('t'), B=document.getElementById('b');
+setInterval(()=>{{const s=stamp(); if(s!==last){{last=s; end=Date.now()+total*1000}}
+ let l=Math.max(0,Math.ceil((end-Date.now())/1000)); if(l<=0){{end=Date.now()+total*1000; l=total}}
+ T.textContent={_json.dumps(label)}+' '+l+'s'; B.style.width=(l/total*100)+'%';}},250);
+</script>"""
+
+
+def dial_html(seconds, stamp_class, target, compact=True):
+    """Small countdown ring with its own round refresh button beside it. Tapping the button (or the ring) presses the app's
+    hidden Refresh button whose key is `target`; the icon spins until fresh data arrives. The countdown restarts when
+    the watched stamp text changes."""
+    C = 238.76
+    return f"""<style>@keyframes sp{{to{{transform:rotate(360deg)}}}} .spin{{animation:sp .8s linear infinite}}</style>
+<div id="w" style="display:flex;align-items:center;justify-content:flex-end;gap:6px;font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent;user-select:none">
+<svg width="46" height="46" viewBox="0 0 92 92" style="cursor:pointer"><circle cx="46" cy="46" r="38" fill="none" stroke="#e3e5ea" stroke-width="9"/>
+<circle id="r" cx="46" cy="46" r="38" fill="none" stroke="{UP}" stroke-width="9" stroke-linecap="round" stroke-dasharray="{C}" stroke-dashoffset="0" transform="rotate(-90 46 46)"/>
+<text id="n" x="46" y="58" text-anchor="middle" font-size="34" font-weight="700" fill="#4b4f60">{int(seconds) if seconds else "–"}</text></svg>
+<div id="btn" role="button" title="Refresh now" style="width:36px;height:36px;border-radius:50%;background:{UP}1f;border:1.5px solid {UP};color:{UP};display:flex;align-items:center;justify-content:center;cursor:pointer">
+<span id="ic" style="font-size:21px;line-height:1;display:block">↻</span></div></div>
+<script>{_WATCH_JS % stamp_class}
+const total={int(seconds or 0)}, C={C}, R=document.getElementById('r'), IC=document.getElementById('ic'), N=document.getElementById('n'); let end=Date.now()+total*1000, last=null, busy=0;
+function press(){{try{{const b=window.parent.document.querySelector('.st-key-{esc(target)} button'); if(b){{busy=Date.now(); IC.classList.add('spin'); b.click();}}}}catch(e){{}}}}
+document.getElementById('btn').addEventListener('click', press); document.querySelector('svg').addEventListener('click', press);
+setInterval(()=>{{const s=stamp(); if(s!==last){{last=s; end=Date.now()+total*1000; busy=0; IC.classList.remove('spin')}}
+ if(busy && Date.now()-busy>9000){{busy=0; IC.classList.remove('spin')}}
+ if(!total) return;
+ let l=Math.max(0,Math.ceil((end-Date.now())/1000)); if(l<=0){{end=Date.now()+total*1000; l=total}}
+ N.textContent=busy?'…':l; R.style.strokeDashoffset=C*(1-l/total);}},250);
+</script>"""
 
 
 GROWW_CSS = f"""<style>
@@ -225,6 +251,16 @@ GROWW_CSS = f"""<style>
 [role="tabpanel"] [role="tablist"] [aria-selected="true"] *{{color:{UP}!important;font-weight:700!important}}
 [data-testid="stToolbar"],[data-testid="stDecoration"],[data-testid="stStatusWidget"],#MainMenu,footer{{display:none!important}}
 header[data-testid="stHeader"]{{height:2.4rem!important;min-height:0!important;background:transparent!important}}
+.st-key-pfhero{{background:linear-gradient(135deg,{UP}14,{BLUE}10)!important;border:1px solid {UP}33!important;border-radius:14px!important;padding:6px 10px!important}}
+.st-key-pfhero [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:4px!important;align-items:center!important}}
+.st-key-pfhero [data-testid="stColumn"],.st-key-pfhero [data-testid="column"]{{min-width:0!important}}
+.st-key-pfhero [data-testid="stColumn"]:not(:first-child),.st-key-pfhero [data-testid="column"]:not(:first-child){{flex:0 0 96px!important;width:96px!important}}
+.gw-grid-hero{{grid-template-columns:repeat(auto-fit,minmax(104px,1fr))}}
+.st-key-pf_refresh{{display:none!important}}
+[data-stale="true"],.stale-element{{opacity:1!important;transition:none!important}}
+[data-testid="stBaseButton-pills"],[data-testid="stBaseButton-segmented_control"]{{border-radius:999px!important}}
+[data-testid="stBaseButton-pillsActive"],[data-testid="stBaseButton-segmented_controlActive"]{{border-radius:999px!important;background:{UP}1f!important;border-color:{UP}!important;color:{UP}!important;font-weight:700!important}}
+[data-testid="stBaseButton-pillsActive"] *,[data-testid="stBaseButton-segmented_controlActive"] *{{color:{UP}!important}}
 .block-container,[data-testid="stMainBlockContainer"]{{padding-top:2.6rem!important;padding-bottom:3rem!important}}
 [class*="st-key-card_box"]{{background:rgba(120,124,140,.07)!important;border-left:4px solid {UP}!important}}
 .gw-boxh{{font-size:1.02rem;font-weight:700;margin-bottom:6px}} .gw-boxh span{{display:block;font-size:.76rem;font-weight:400;opacity:.65;margin-top:1px}}

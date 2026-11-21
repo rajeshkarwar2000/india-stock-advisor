@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import numpy as np, pandas as pd, streamlit as st, yfinance as yf
 import streamlit.components.v1 as components
 
-FILES_VERSION = 11     # engine.py and ui.py must carry the same number
+FILES_VERSION = 15     # engine.py and ui.py must carry the same number
 
 def _files_ok():
     try:
@@ -57,6 +57,10 @@ acct = st.session_state.acct
 def save(): json.dump(acct, open(path, "w"))
 def flash(msg): st.session_state.setdefault("flash", []).append(msg)
 
+def show_dialog(name, *args):
+    """Open a buy / sell / settings window. Queued, then opened on a full rerun, so it also works from inside a live fragment."""
+    st.session_state["pending_dlg"] = (name, args); st.rerun(scope="app")
+
 from contextlib import contextmanager
 @contextmanager
 def box(title, key, sub=""):
@@ -67,13 +71,15 @@ def box(title, key, sub=""):
 
 # ---------- settings: the ⚙️ window in the top bar. Kept for the session and saved with the demo account ----------
 APPEARANCE = ("theme", "blur", "fs", "hc", "anim")
-DEFAULTS = dict(capital=100000, risk=1.0, auto_on=True, every=60, pf_auto=True, pf_every=30, topn=8, uni=list(E.UNIVERSES)[0], extra="",
+DEFAULTS = dict(capital=100000, risk=1.0, auto_on=True, every=60, pf_auto=True, pf_every=60, topn=8, uni=list(E.UNIVERSES)[0], extra="",
                 research_on=True, auto_exec=True, gmodel="gemini-flash-latest", gsearch=True,
                 theme=E.DEFAULT_THEME, blur=16, fs=16, hc=False, anim=True)
 S = {**DEFAULTS, **{k: acct[k] for k in APPEARANCE if k in acct}, **acct.get("settings", {}), **st.session_state.get("cfg", {})}
 if S["uni"] not in E.UNIVERSES: S["uni"] = DEFAULTS["uni"]
 if S["theme"] not in E.THEMES: S["theme"] = E.DEFAULT_THEME
-if acct.get("settings") != {k: S[k] for k in DEFAULTS}: acct["settings"] = {k: S[k] for k in DEFAULTS}; save()
+if acct.get("settings", {}).get("_v", 0) < 2 and "cfg" not in st.session_state: S["every"] = S["pf_every"] = 60      # 1 minute is the standard
+_persist = {**{k: S[k] for k in DEFAULTS}, "_v": 2}
+if acct.get("settings") != _persist: acct["settings"] = _persist; save()
 capital, risk, auto_on, every, pf_auto, pf_every = S["capital"], S["risk"], S["auto_on"], S["every"], S["pf_auto"], S["pf_every"]
 topn, uni, extra, research_on, auto_exec, gmodel, gsearch = S["topn"], S["uni"], S["extra"], S["research_on"], S["auto_exec"], S["gmodel"], S["gsearch"]
 th, blur, fs, hc, anim = S["theme"], S["blur"], S["fs"], S["hc"], S["anim"]
@@ -88,36 +94,48 @@ def inject_css(css_html):
 inject_css(E.theme_css(th, blur, 22, anim, fs, hc) + U.GROWW_CSS)
 
 _secs = lambda s: f"{s} sec" if s < 60 else f"{s // 60} min"
+def _pick(label, options, current, key, fmt=str):
+    """Capsule choice: one option highlighted. Never returns None (tapping the chosen one again keeps it)."""
+    v = st.pills(label, options, selection_mode="single", default=current if current in options else options[0], format_func=fmt, key=key)
+    return current if v is None else v
+def _onoff(label, current, key, help=None):
+    v = st.pills(label, ["On", "Off"], selection_mode="single", default="On" if current else "Off", key=key, help=help)
+    return bool(current) if v is None else v == "On"
+_BLUR = {"Off": 0, "Low": 8, "Medium": 16, "High": 24}; _FS = {"Small": 15, "Normal": 16, "Large": 18, "Extra large": 20}
+_near = lambda d, v: min(d, key=lambda k: abs(d[k] - v))
+
 @st.dialog("⚙️ Settings", width="large")
 def settings_dialog():
-    st.caption("Tap a section to open it. Your changes apply when you tap **Save & apply**.")
-    with st.expander("👤  Account", expanded=True):
-        n_user = st.text_input("Demo account name", user, key="st_user", help="Each name keeps its own virtual portfolio.")
+    st.caption("Pick an option in each block. Nothing changes until you tap **Save & apply**.")
+    with box("👤 Account", "st_acc", "Each name keeps its own virtual portfolio"):
+        n_user = st.text_input("Demo account name", user, key="st_user")
         n_cap = st.number_input("Capital for sizing ideas (₹)", 10000, 100000000, int(S["capital"]), step=10000, key="st_cap")
-        n_risk = st.slider("Max loss per trade (% of capital)", 0.5, 3.0, float(S["risk"]), 0.5, key="st_risk")
-    with st.expander("⏱  Market refresh"):
-        n_auto = st.toggle("Auto-refresh market prices", bool(S["auto_on"]), key="st_auto", help="The countdown at the top shows the time left. It pauses while a buy/sell window is open.")
-        n_every = st.select_slider("Refresh every", options=[15, 30, 60, 120, 300], value=S["every"] if S["every"] in (15, 30, 60, 120, 300) else 60, format_func=_secs, key="st_every")
-    with st.expander("💼  Portfolio refresh"):
-        n_pauto = st.toggle("Auto-refresh my portfolio", bool(S["pf_auto"]), key="st_pauto", help="Separate from the market refresh: only your holdings' prices.")
-        n_pevery = st.select_slider("Portfolio refresh every", options=[10, 15, 30, 60, 120], value=S["pf_every"] if S["pf_every"] in (10, 15, 30, 60, 120) else 30, format_func=_secs, key="st_pevery")
-    with st.expander("💡  Ideas & scan"):
-        n_topn = st.slider("How many ideas per list", 3, 15, int(S["topn"]), key="st_topn")
-        n_uni = st.selectbox("Stock universe", list(E.UNIVERSES), index=list(E.UNIVERSES).index(S["uni"]), key="st_uni", help="Search any other company in Explore > Search & watchlist.")
+        n_risk = _pick("Max loss per trade (% of capital)", [0.5, 1.0, 1.5, 2.0, 3.0], float(S["risk"]), "st_risk", lambda x: f"{x:g}%")
+    with box("⏱ Market refresh", "st_mk", "Explore prices and the market bar"):
+        n_auto = _onoff("Auto-refresh", bool(S["auto_on"]), "st_auto", "Updates by itself without reloading the page.")
+        n_every = st.slider("Refresh every (seconds)", 10, 300, min(max(int(S["every"]), 10), 300), step=5, key="st_every", format="%d sec",
+                            help="Anything from 10 seconds to 5 minutes. Standard: 60 seconds (1 minute).")
+    with box("💼 Portfolio refresh", "st_pf", "Only your holdings"):
+        n_pauto = _onoff("Auto-refresh", bool(S["pf_auto"]), "st_pauto", "The dial in the Current value card shows the time left.")
+        n_pevery = st.slider("Refresh every (seconds)", 10, 300, min(max(int(S["pf_every"]), 10), 300), step=5, key="st_pevery", format="%d sec",
+                             help="Anything from 10 seconds to 5 minutes. Standard: 60 seconds (1 minute).")
+    with box("💡 Ideas & scan", "st_id"):
+        n_topn = _pick("Ideas per list", [5, 8, 10, 15], int(S["topn"]), "st_topn")
+        n_uni = _pick("Stock universe", list(E.UNIVERSES), S["uni"], "st_uni")
         n_extra = st.text_input("Add NSE symbols to the lists (comma-separated)", S["extra"], key="st_extra")
-        n_res = st.checkbox("Use analyst & results data (slower)", bool(S["research_on"]), key="st_res")
-    with st.expander("🛡  Order rules"):
-        n_aex = st.checkbox("Auto-sell at stop-loss / target (demo)", bool(S["auto_exec"]), key="st_aex", help="Checked whenever the app is open.")
-    with st.expander("🤖  Gemini"):
-        n_gkey = st.text_input("Gemini API key (optional)", gkey, type="password", key="st_gkey", help="Free key from aistudio.google.com. Kept only for this session, never saved to disk.")
-        n_gmodel = st.text_input("Gemini model", S["gmodel"], key="st_gmodel", help="Check ai.google.dev for current model names.")
-        n_gsearch = st.checkbox("Let Gemini search the web (Google Search)", bool(S["gsearch"]), key="st_gsearch")
-    with st.expander("🎨  Appearance"):
-        n_theme = st.selectbox("Theme", list(E.THEMES), index=list(E.THEMES).index(S["theme"]), key="st_theme")
-        n_blur = st.slider("Glass blur", 0, 30, int(S["blur"]), key="st_blur", help="Lower is faster and saves battery. 0 = no blur.")
-        n_fs = st.slider("Text size", 14, 20, int(S["fs"]), key="st_fs")
-        n_hc = st.checkbox("High contrast (clearest text)", bool(S["hc"]), key="st_hc")
-        n_anim = st.checkbox("Animated background", bool(S["anim"]), key="st_anim")
+        n_res = _onoff("Use analyst & results data (slower)", bool(S["research_on"]), "st_res")
+    with box("🛡 Order rules", "st_or"):
+        n_aex = _onoff("Auto-sell at stop-loss / target", bool(S["auto_exec"]), "st_aex", "Checked whenever the app is open.")
+    with box("🤖 Gemini", "st_gm", "Optional: for the in-app chat and one-tap reviews"):
+        n_gkey = st.text_input("Gemini API key", gkey, type="password", key="st_gkey", help="Free key from aistudio.google.com. Kept only for this session, never saved to disk.")
+        n_gmodel = st.text_input("Gemini model", S["gmodel"], key="st_gmodel")
+        n_gsearch = _onoff("Let Gemini search the web (Google Search)", bool(S["gsearch"]), "st_gsearch")
+    with box("🎨 Appearance", "st_ap"):
+        n_theme = _pick("Theme", list(E.THEMES), S["theme"], "st_theme")
+        n_blur = _BLUR[_pick("Glass blur", list(_BLUR), _near(_BLUR, int(S["blur"])), "st_blur")]
+        n_fs = _FS[_pick("Text size", list(_FS), _near(_FS, int(S["fs"])), "st_fs")]
+        n_hc = _onoff("High contrast (clearest text)", bool(S["hc"]), "st_hc")
+        n_anim = _onoff("Animated background", bool(S["anim"]), "st_anim")
     c1, c2 = st.columns(2)
     if c1.button("💾 Save & apply", type="primary", key="st_save", use_container_width=True):
         st.session_state["cfg"] = dict(capital=int(n_cap), risk=float(n_risk), auto_on=bool(n_auto), every=int(n_every), pf_auto=bool(n_pauto), pf_every=int(n_pevery),
@@ -377,6 +395,16 @@ rows = build_rows()
 day_total = sum(r["day_pnl"] for r in rows)
 day_total_pct = day_total / (perf["current"] - day_total) * 100 if perf["current"] - day_total > 0 else 0.0
 
+def refresh_state():
+    """Recompute the portfolio numbers from the latest prices (the live Portfolio fragment calls this every refresh)."""
+    global pos, realised, ltp, perf, mh, rows, day_total, day_total_pct
+    pos, realised = get_pos(); ltp = {s: px(s) for s in pos}
+    perf = E.performance(acct["trades"], acct["start_cash"], ltp)
+    mh = E.metrics(close_all[[s for s in pos if s in close_all.columns]], min_len=3) if pos else pd.DataFrame()
+    rows = build_rows()
+    day_total = sum(r["day_pnl"] for r in rows)
+    day_total_pct = day_total / (perf["current"] - day_total) * 100 if perf["current"] - day_total > 0 else 0.0
+
 # live net-worth points for this session (Portfolio > Growth)
 _ls = st.session_state.setdefault(f"live_series_{user}", [])
 if acct["trades"] and (not _ls or time.time() - _ls[-1][0] >= 10):
@@ -447,15 +475,17 @@ def style_df(df, pnl=(), side=None, fmt=None):
         return df
 
 # ---------- live bar: market status, indices, countdown, refresh ----------
-_iq = index_quotes()
-st.markdown(U.live_bar_html(mo, _iq, ""), unsafe_allow_html=True)
-if _iq.get("Nifty 50") and _iq["Nifty 50"][1] <= -1.0:
-    st.warning(f"The market is down {_iq['Nifty 50'][1]:.1f}% (Nifty). New buys are riskier on days like this, so consider waiting and keep your stop-losses on.")
+def index_bar():
+    iq = index_quotes()
+    st.markdown(U.live_bar_html(E.market_open(now_ist()), iq, now_ist().strftime("%H:%M:%S")), unsafe_allow_html=True)
+    if iq.get("Nifty 50") and iq["Nifty 50"][1] <= -1.0:
+        st.warning(f"The market is down {iq['Nifty 50'][1]:.1f}% (Nifty). New buys are riskier on days like this, so consider waiting and keep your stop-losses on.")
+st.fragment(run_every=(every if auto_on else None))(index_bar)()
 with st.container(key="topbar"):
     _l2, _l3, _l4 = st.columns([6, 1, 1], vertical_alignment="center")
-    with _l2: components.html(U.countdown_html(every if auto_on else 0, NONCE, True, "Market refresh in"), height=34)
+    with _l2: components.html(U.countdown_html(every if auto_on else 0, "gw-stamp-mk", "Market refresh in"), height=34)
     _l3.button("🔄", key="live_refresh", on_click=refresh_now, help="Refresh market prices now")
-    if _l4.button("⚙️", key="open_settings", help="Settings"): settings_dialog()
+    if _l4.button("⚙️", key="open_settings", help="Settings"): show_dialog("settings")
 
 # ---------- Buy window (like Groww: product, order type, quantity, price) ----------
 @st.dialog("Buy")
@@ -535,7 +565,10 @@ def open_buy(sym, name, price, dpct, p=None, kind=None, qty=1):
         shift = price - p["entry"]
         stop, tgt = p["stop"] + shift, p["target"] + shift
         if not (0 < stop < price < tgt): stop = tgt = None
-    buy_dialog(sym, name, price, dpct, round(stop, 2) if stop else None, round(tgt, 2) if tgt else None, max(int(qty), 1), KIND_HZ.get(kind, "1M"))
+    show_dialog("buy", sym, name, price, dpct, round(stop, 2) if stop else None, round(tgt, 2) if tgt else None, max(int(qty), 1), KIND_HZ.get(kind, "1M"))
+
+_pd = st.session_state.pop("pending_dlg", None)
+if _pd: {"buy": buy_dialog, "sell": sell_dialog, "settings": settings_dialog}[_pd[0]](*_pd[1])
 
 def watch_button(c, sym, key):
     w = acct.setdefault("watch", [])
@@ -706,7 +739,9 @@ def search_view():
 
 with st.container(key="mainnav"):      # the main ribbon: styled as iPhone-style pills (see ui.GROWW_CSS)
     t_ex, t_pf, t_ai, t_tools = st.tabs(["🔎 Explore", "💼 Portfolio", "🤖 Gemini", "🛠 Tools"])
-with t_ex:
+def explore_section():
+    """Explore area: reruns by itself every market-refresh interval with fresh prices (only this part of the page)."""
+    live.update(live_prices(tuple(need)))
     e1, e6, e12, e_scan, e_find = st.tabs(["1 Month", "6 Months", "1 Year", "🚀 Scan all stocks", "🔍 Search & watchlist"])
     with e1, box("1 Month ideas", "i1m"): show_ideas("short", "i1m", 1, 10, "Short-term momentum ideas for about 1 month.")
     with e6, box("6 Months ideas", "i6m"): show_ideas("mid", "i6m", 6, 40, "Medium-term trend ideas for about 6 months.")
@@ -715,6 +750,9 @@ with t_ex:
         st.write("Scans the **whole market**, not a fixed list, for stocks with the highest realistic return potential that are still **feasible to trade** (liquidity and price filters).")
         scan_view()
     with e_find: search_view()
+
+with t_ex:
+    st.fragment(run_every=(every if auto_on else None))(explore_section)()
 
 # ======================================================================
 # Portfolio
@@ -731,7 +769,12 @@ def protect_all():
     save(); flash(f"🛡 Stop-loss set or raised on {n} holding{'s' if n != 1 else ''}" if n else "All holdings already have a stop-loss at or above this level.")
 
 def holdings_view():
-    st.markdown(U.summary_html(perf, day_total, day_total_pct, len(rows)), unsafe_allow_html=True)
+    with st.container(key="pfhero"):
+        hc1, hc2 = st.columns([3, 1], vertical_alignment="center")
+        hc1.markdown(U.summary_html(perf, day_total, day_total_pct, len(rows), PF_STAMP, plain=True, part="top"), unsafe_allow_html=True)
+        with hc2: components.html(U.dial_html(pf_every if pf_auto else 0, "gw-stamp-pf", "pf_refresh"), height=50)
+        st.markdown(U.summary_html(perf, day_total, day_total_pct, len(rows), PF_STAMP, plain=True, part="rest"), unsafe_allow_html=True)
+        st.button("🔄", key="pf_refresh", on_click=refresh_portfolio)      # pressed by the dial; hidden by CSS
     if not rows:
         st.info("No holdings yet. Open **Explore**, pick an idea and tap **Buy**."); return
     with box("🛡 Protection", "prot", "Stop-losses cap how much a stock can lose"):
@@ -755,8 +798,8 @@ def holdings_view():
             with cols[i % 2], st.container(border=True, key=f"card_hold_{i}"):
                 st.markdown(U.holding_html(h), unsafe_allow_html=True)
                 b1, b2, b3 = st.columns(3)
-                if b1.button("Buy more", key=f"buy_hold_{s}", type="primary", use_container_width=True): buy_dialog(s, h["name"], h["ltp"], h["day_pct"], h["stop"], h["target"], 1, h["horizon"] or "1M")
-                if b2.button("Sell", key=f"sell_hold_{s}", use_container_width=True): sell_dialog(s, h["name"], h["ltp"], h["day_pct"])
+                if b1.button("Buy more", key=f"buy_hold_{s}", type="primary", use_container_width=True): show_dialog("buy", s, h["name"], h["ltp"], h["day_pct"], h["stop"], h["target"], 1, h["horizon"] or "1M")
+                if b2.button("Sell", key=f"sell_hold_{s}", use_container_width=True): show_dialog("sell", s, h["name"], h["ltp"], h["day_pct"])
                 if b3.toggle("Details", key=f"det_{s}"):
                     sn = close_all[s].dropna() if s in close_all.columns else pd.Series(dtype=float)
                     sn = sn[sn.index >= pd.Timestamp(h["since"]).normalize() - pd.Timedelta(days=7)]
@@ -852,9 +895,9 @@ def rec_cards(items, key, banner=None):
             b = st.columns(3); nm = (FA.get(s) or {}).get("name")
             if price != price: st.info("No price found for this symbol, so it can't be traded here."); continue
             if a["action"] in ("SELL PART", "SELL ALL") and s in held_ and b[0].button(f"Sell {a['qty'] if a['action'] == 'SELL PART' and a['qty'] else 'all'}", key=f"sell_{key}_{i}", use_container_width=True):
-                sell_dialog(s, nm, price, dp, a["qty"] if a["action"] == "SELL PART" else None)
+                show_dialog("sell", s, nm, price, dp, a["qty"] if a["action"] == "SELL PART" else None)
             if a["action"] in ("BUY MORE", "BUY NEW") and b[0].button(f"Buy {a['qty'] or ''}".strip(), key=f"buy_{key}_{i}", type="primary", use_container_width=True):
-                buy_dialog(s, nm, price, dp, a["stop"] if a["stop"] and a["stop"] < price else None, a["target"] if a["target"] and a["target"] > price else None,
+                show_dialog("buy", s, nm, price, dp, a["stop"] if a["stop"] and a["stop"] < price else None, a["target"] if a["target"] and a["target"] > price else None,
                            a["qty"] or 1, a["horizon"] or "1M")
             if s in held_ and ((a["stop"] and a["stop"] < price) or (a["target"] and a["target"] > price)) and b[1].button("Apply stop/target", key=f"lv_{key}_{i}", use_container_width=True):
                 lv = acct.setdefault("levels", {}).setdefault(s, {})
@@ -918,11 +961,15 @@ def account_view():
                "Limit orders and stop-loss / target sells are checked whenever the app is open. Intraday positions are squared off at 3:20 PM. "
                "On free cloud hosting, saved accounts may reset when the app restarts, so export a backup.")
 
-with t_pf:
-    with st.container(key="pfbar"):
-        h1, h2 = st.columns([6, 1], vertical_alignment="center")
-        with h1: components.html(U.countdown_html(pf_every if pf_auto else 0, NONCE, True, f"Updated {PF_STAMP} · next in", "pf_refresh"), height=34)
-        h2.button("🔄", key="pf_refresh", on_click=refresh_portfolio, help="Refresh portfolio prices now")
+def portfolio_section():
+    """The whole Portfolio area. Reruns by itself every refresh interval (only this part of the page), so nothing else blinks or waits."""
+    global PF_STAMP
+    pf_live, PF_STAMP = pf_prices(tuple(s for s in get_pos()[0] if s in close_all.columns))
+    live.update(pf_live)
+    msgs = run_orders()
+    if msgs:
+        st.session_state.msgs = msgs; st.rerun(scope="app")          # a stop-loss / target / limit order fired: refresh everything
+    refresh_state()
     p_h, p_o, p_p, p_g, p_r, p_a = st.tabs(["Holdings", "Orders", "P&L", "Growth", "Gemini", "Account"])
     with p_h: holdings_view()
     with p_o: orders_view()
@@ -930,6 +977,9 @@ with t_pf:
     with p_g: growth_view()
     with p_r: review_view()
     with p_a: account_view()
+
+with t_pf:
+    st.fragment(run_every=(pf_every if pf_auto else None))(portfolio_section)()
 
 # ======================================================================
 # Gemini AI (ideas)
@@ -993,7 +1043,7 @@ with t_ai:
                         qn = max(E.qty_for(last, stop_ok, capital, risk), 1)
                         c1, c2 = st.columns(2)
                         if c1.button("Buy", key=f"gr_{i}_{use}", type="primary", use_container_width=True):
-                            buy_dialog(use, r.get("company"), last, dp, stop_ok, tgt_ok, qn, E.horizon_of(r["horizon"]) or "1M")
+                            show_dialog("buy", use, r.get("company"), last, dp, stop_ok, tgt_ok, qn, E.horizon_of(r["horizon"]) or "1M")
                         watch_button(c2, use, f"rec_{i}")
                     else:
                         st.info("No price found for this symbol on NSE/BSE. Check it in Explore > Search & watchlist (try the company name or BSE code).")
